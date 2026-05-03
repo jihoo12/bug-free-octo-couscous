@@ -5,10 +5,10 @@ type Name = String
 type Index = Int
 
 data Term
-    = Var Index
-    | App Term Term
+    = Var Index -- variable use indecs De bruijin indecs
+    | App Term Term --apply function
     | Lam Name Term Term  -- Name is a hint for printing
-    | Pi  Name Term Term  
+    | Pi  Name Term Term  --Pi type 
     | Kind                -- (*)
     | Box                 -- (□)
     deriving (Eq)
