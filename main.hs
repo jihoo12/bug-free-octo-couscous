@@ -1,8 +1,8 @@
 import qualified Data.Set as Set
 
 -- 1. Data Definition
-type Name = String
-type Index = Int
+type Name = String -- Name String
+type Index = Int -- Index Int
 
 data Term
     = Var Index -- variable use indecs De bruijin indecs
@@ -11,7 +11,7 @@ data Term
     | Pi  Name Term Term  --Pi type 
     | Kind                -- (*)
     | Box                 -- (□)
-    deriving (Eq)
+    deriving (Eq) -- the magic that makes a feature that compare equality automatically?
 
 instance Show Term where
     show (Var i)     = show i
@@ -20,6 +20,7 @@ instance Show Term where
     show (Pi x t b)  = "Π" ++ x ++ ":" ++ show t ++ "." ++ show b
     show Kind        = "*"
     show Box         = "□"
+    -- maybe just for print
 
 -- 2. De Bruijn Shifting and Substitution
 -- shift d c t: increments all indices in t that are >= c by d
