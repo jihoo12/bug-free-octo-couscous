@@ -1,7 +1,7 @@
 import qualified Data.Set as Set
 import Control.Monad (fmap)
 
--- 1. Data Definitions
+-- 1. Unified Data Definition
 type Name = String
 
 data Type
