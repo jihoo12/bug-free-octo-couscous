@@ -1,39 +1,36 @@
 {-# LANGUAGE GADTs #-}
 
-module CubicalInterval where
+module CubicalLambda where
 
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.List (intercalate)
 
 --------------------------------------------------------------------------------
--- 1. Syntax (AST)
+-- 1. Interval Syntax & DNF
 --------------------------------------------------------------------------------
 
 data I 
-    = I0 
-    | I1 
-    | Var Int      -- Added variables/dimensions (i, j, k...)
-    | Meet I I 
-    | Join I I 
-    | Neg I
-    deriving (Show, Eq, Ord)
+    = I0 | I1 
+    | IVar Int 
+    | Meet I I | Join I I | Neg I
+    deriving (Eq, Ord)
 
---------------------------------------------------------------------------------
--- 2. DNF Representation (Semantics)
---------------------------------------------------------------------------------
+instance Show I where
+    show I0 = "0"
+    show I1 = "1"
+    show (IVar n) = "i" ++ show n
+    show (Meet i j) = "(" ++ show i ++ " ∧ " ++ show j ++ ")"
+    show (Join i j) = "(" ++ show i ++ " ∨ " ++ show j ++ ")"
+    show (Neg i) = "¬" ++ show i
 
--- A Literal is either a dimension (i) or its negation (¬i).
 data Literal = Pos Int | NegVar Int deriving (Eq, Ord)
 
 instance Show Literal where
     show (Pos n)    = "i" ++ show n
     show (NegVar n) = "¬i" ++ show n
 
--- A Cube is a conjunction of literals: (L1 ∧ L2 ∧ ...)
-type Cube = Set Literal
-
--- DNF is a disjunction of cubes: (Cube1 ∨ Cube2 ∨ ...)
-newtype DNF = DNF { getCubes :: Set Cube } deriving (Eq, Ord)
+newtype DNF = DNF { getCubes :: Set (Set Literal) } deriving (Eq, Ord)
 
 instance Show DNF where
     show (DNF cs) 
@@ -41,87 +38,153 @@ instance Show DNF where
         | Set.null (Set.findMin cs) && Set.size cs == 1 = "1"
         | otherwise = intercalate " ∨ " (map showCube (Set.toList cs))
       where
-        showCube c 
-            | Set.null c = "1"
-            | otherwise  = "(" ++ intercalate " ∧ " (map show (Set.toList c)) ++ ")"
-        intercalate sep = foldr (\x acc -> if acc == "" then x else x ++ sep ++ acc) ""
+        showCube c = if Set.null c then "1" else "(" ++ intercalate " ∧ " (map show (Set.toList c)) ++ ")"
 
 --------------------------------------------------------------------------------
--- 3. DNF Algebra Operations
+-- 2. Cubical Dependent Syntax
 --------------------------------------------------------------------------------
 
--- | Simplifies by Subsumption: A ∨ (A ∧ B) = A
--- We remove any cube that is a superset of another cube.
-simplify :: Set Cube -> Set Cube
-simplify cubes = Set.filter (\c -> not $ any (isStrictSubsetOf c) cubes) cubes
-  where isStrictSubsetOf a b = a /= b && a `Set.isSubsetOf` b
+type Name = String
+type Level = Int
 
-dnfJoin :: DNF -> DNF -> DNF
-dnfJoin (DNF a) (DNF b) = DNF $ simplify (Set.union a b)
+data Term
+    = TVar Name
+    | TApp Term Term
+    | TAbs Name Term
+    -- Universes
+    | TUniv Level           -- U_n
+    -- Dependent Types (Pi Types)
+    | TPi Name Term Term    -- Π(x:A). B
+    -- Cubical Additions
+    | TInterval I           -- Symbolic Interval
+    | TCube DNF             -- Normalized Interval
+    -- Path Types
+    | TPath Term Term Term  -- Path A u v
+    | PLam Name Term        -- ⟨i⟩ t (Path abstraction)
+    | PApp Term Term        -- t @ r (Path application)
+    deriving (Eq)
 
-dnfMeet :: DNF -> DNF -> DNF
-dnfMeet (DNF as) (DNF bs) = 
-    DNF $ simplify $ Set.fromList 
-    [ Set.union a b | a <- Set.toList as, b <- Set.toList bs ]
+instance Show Term where
+    show t = case t of
+        TVar x      -> x
+        TApp f a    -> "(" ++ show f ++ " " ++ show a ++ ")"
+        TAbs x b    -> "λ" ++ x ++ ". " ++ show b
+        TUniv n     -> "U" ++ show n
+        TPi x a b   -> "Π(" ++ x ++ ":" ++ show a ++ "). " ++ show b
+        TInterval i -> show i
+        TCube c     -> show c
+        TPath a u v -> "Path " ++ show a ++ " " ++ show u ++ " " ++ show v
+        PLam i t    -> "⟨" ++ i ++ "⟩ " ++ show t
+        PApp t r    -> show t ++ " @ " ++ show r
 
-dnfNeg :: DNF -> DNF
+--------------------------------------------------------------------------------
+-- 3. Evaluation & Substitution
+--------------------------------------------------------------------------------
+
+-- | Capture-avoiding substitution: t[x := s]
+subst :: Name -> Term -> Term -> Term
+subst x s term = case term of
+    TVar y      | x == y    -> s
+                | otherwise -> TVar y
+    TApp f a                -> TApp (subst x s f) (subst x s a)
+    TAbs y b    | x == y    -> TAbs y b
+                | otherwise -> TAbs y (subst x s b)
+    TPi y a b   | x == y    -> TPi y (subst x s a) b
+                | otherwise -> TPi y (subst x s a) (subst x s b)
+    TUniv n                 -> TUniv n
+    TInterval i             -> TInterval i
+    TCube c                 -> TCube c
+    TPath a u v             -> TPath (subst x s a) (subst x s u) (subst x s v)
+    PLam i t    | x == i    -> PLam i t
+                | otherwise -> PLam i (subst x s t)
+    PApp t r                -> PApp (subst x s t) (subst x s r)
+
+-- | Normalizes terms to Normal Form
+eval :: Term -> Term
+eval t = case t of
+    TApp f a -> 
+        case eval f of
+            TAbs x body -> eval (subst x (eval a) body)
+            f'          -> TApp f' (eval a)
+    
+    -- Path Beta-reduction: (⟨i⟩ t) @ r  ==>  t[i := r]
+    PApp t r ->
+        case eval t of
+            PLam i body -> eval (subst i (eval r) body)
+            t'          -> PApp t' (eval r)
+
+    TAbs x b    -> TAbs x (eval b)
+    TPi x a b   -> TPi x (eval a) (eval b)
+    TPath a u v -> TPath (eval a) (eval u) (eval v)
+    PLam i b    -> PLam i (eval b)
+    TInterval i -> TCube (evalInterval i)
+    _           -> t
+
+--------------------------------------------------------------------------------
+-- 4. Interval Algebra
+--------------------------------------------------------------------------------
+
+simplify :: Set (Set Literal) -> Set (Set Literal)
+simplify cubes = Set.filter (\c -> not $ any (\other -> c /= other && other `Set.isSubsetOf` c) cubes) cubes
+
+evalInterval :: I -> DNF
+evalInterval I0          = DNF Set.empty
+evalInterval I1          = DNF (Set.singleton Set.empty)
+evalInterval (IVar n)    = DNF (Set.singleton (Set.singleton (Pos n)))
+evalInterval (Neg i)     = dnfNeg (evalInterval i)
+evalInterval (Meet i j)  = dnfMeet (evalInterval i) (evalInterval j)
+evalInterval (Join i j)  = dnfJoin (evalInterval i) (evalInterval j)
+
+dnfJoin (DNF a) (DNF b)   = DNF $ simplify (Set.union a b)
+dnfMeet (DNF as) (DNF bs) = DNF $ simplify $ Set.fromList [ Set.union a b | a <- Set.toList as, b <- Set.toList bs ]
 dnfNeg (DNF cubes) 
-    | Set.null cubes = dnfTrue
-    | otherwise = foldr dnfMeet dnfTrue (map negCube (Set.toList cubes))
+    | Set.null cubes = DNF $ Set.singleton Set.empty
+    | otherwise = foldr dnfMeet (DNF $ Set.singleton Set.empty) (map negCube (Set.toList cubes))
   where
     negCube c = DNF $ Set.fromList [Set.singleton (negLit l) | l <- Set.toList c]
-    negLit (Pos n)    = NegVar n
+    negLit (Pos n) = NegVar n
     negLit (NegVar n) = Pos n
-    dnfTrue = DNF $ Set.singleton Set.empty
 
 --------------------------------------------------------------------------------
--- 4. Evaluation and Normalization
---------------------------------------------------------------------------------
-
-eval :: I -> DNF
-eval I0         = DNF Set.empty
-eval I1         = DNF (Set.singleton Set.empty)
-eval (Var n)    = DNF (Set.singleton (Set.singleton (Pos n)))
-eval (Neg i)    = dnfNeg (eval i)
-eval (Meet i j) = dnfMeet (eval i) (eval j)
-eval (Join i j) = dnfJoin (eval i) (eval j)
-
--- | Normalizing an expression means converting it to DNF and back to Syntax
--- Or simply comparing their DNF forms.
-normalize :: I -> DNF
-normalize = eval
-
---------------------------------------------------------------------------------
--- 5. Main Execution & Tests
+-- 5. Demonstration
 --------------------------------------------------------------------------------
 
 main :: IO ()
 main = do
-    let i = Var 0
-    let j = Var 1
+    putStrLn "=== Cubical Lambda Calculus with Path Types ==="
 
-    putStrLn "=== De Morgan DNF Tests ==="
+    -- 1. Identity function (Standard Pi Type)
+    let idType = TPi "A" (TUniv 0) (TPi "x" (TVar "A") (TVar "A"))
+    let idTerm = TAbs "A" (TAbs "x" (TVar "x"))
     
-    -- Idempotence: i ∨ i = i
-    putStrLn $ "i ∨ i           -> " ++ show (normalize (Join i i))
-    
-    -- Absorption: i ∨ (i ∧ j) = i
-    putStrLn $ "i ∨ (i ∧ j)     -> " ++ show (normalize (Join i (Meet i j)))
-    
-    -- De Morgan: ¬(i ∧ j) = ¬i ∨ ¬j
-    putStrLn $ "¬(i ∧ j)        -> " ++ show (normalize (Neg (Meet i j)))
-    
-    -- Double Negation: ¬¬i = i
-    putStrLn $ "¬¬i             -> " ++ show (normalize (Neg (Neg i)))
-    
-    -- Complex: (i ∨ 1) ∧ j = j
-    putStrLn $ "(i ∨ 1) ∧ j     -> " ++ show (normalize (Meet (Join i I1) j))
+    putStrLn $ "\nIdentity Type: " ++ show idType
+    putStrLn $ "Identity Term: " ++ show idTerm
 
-    putStrLn "\n=== Cubical Connections ==="
-    -- connAnd i j = i ∧ j
-    let connAnd = Meet i j
-    putStrLn $ "Connection And  -> " ++ show (normalize connAnd)
+    -- 2. Reflexivity (Path Type)
+    -- refl : Π(A:U0). Π(x:A). Path A x x
+    -- refl = λA. λx. ⟨i⟩ x
+    let refl = TAbs "A" (TAbs "x" (PLam "i" (TVar "x")))
+    putStrLn $ "\nReflexivity (refl): " ++ show refl
+
+    -- 3. Path Application
+    -- Applying refl to a type and term, then applying an interval
+    -- (refl U0 T) @ 0
+    let testPath = PApp (TApp (TApp refl (TUniv 0)) (TVar "T")) (TInterval I0)
+    putStrLn $ "\nEvaluating (refl U0 T) @ 0:"
+    putStrLn $ "Result: " ++ show (eval testPath)
+
+    -- 4. De Morgan in the Interval (Normalized inside a Path)
+    -- ⟨i⟩ Path A (¬(i0 ∨ i1)) (¬i0 ∧ ¬i1)
+    let deMorganLHS = Neg (Join (IVar 0) (IVar 1))
+    let deMorganRHS = Meet (Neg (IVar 0)) (Neg (IVar 1))
+    let pathDeMorgan = TPath (TUniv 0) (TInterval deMorganLHS) (TInterval deMorganRHS)
     
-    -- connOr i j = i ∨ j
-    let connOr = Join i j
-    putStrLn $ "Connection Or   -> " ++ show (normalize connOr)
+    putStrLn $ "\nNormalized De Morgan Interval in Type:"
+    putStrLn $ "Raw: " ++ show pathDeMorgan
+    putStrLn $ "Normalized: " ++ show (eval pathDeMorgan)
+
+    -- 5. Symmetry (Function that flips a path)
+    -- sym : Π(A:U0). Π(x y: A). Path A x y -> Path A y x
+    -- sym = λA. λx. λy. λp. ⟨i⟩ p @ ¬i
+    let sym = TAbs "A" (TAbs "x" (TAbs "y" (TAbs "p" (PLam "i" (PApp (TVar "p") (TInterval (Neg (IVar 0))))))))
+    putStrLn $ "\nSymmetry term: " ++ show sym
