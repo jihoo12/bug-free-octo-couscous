@@ -1,2 +1,2 @@
-# bug-free-octo-couscous
+# octo
 make something using haskell
