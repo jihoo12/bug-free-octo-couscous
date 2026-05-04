@@ -185,6 +185,6 @@ main = do
             putStrLn $ "Reduced @ 1: " ++ show (reduce (PApp refl I1))
         Left e -> putStrLn $ "Error: " ++ e
 -- current goal 
--- composition
 -- glueing
+-- composition
 -- de morgan algebra
