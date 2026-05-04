@@ -1,38 +1,28 @@
 {-# LANGUAGE GADTs #-}
 
-module CubicalInterval where
+module CubicalLambda where
 
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Data.List (intercalate)
 
 --------------------------------------------------------------------------------
--- 1. Syntax (AST)
+-- 1. Interval Syntax & DNF (Your Original Logic)
 --------------------------------------------------------------------------------
 
 data I 
-    = I0 
-    | I1 
-    | Var Int      -- Added variables/dimensions (i, j, k...)
-    | Meet I I 
-    | Join I I 
-    | Neg I
+    = I0 | I1 
+    | IVar Int 
+    | Meet I I | Join I I | Neg I
     deriving (Show, Eq, Ord)
 
---------------------------------------------------------------------------------
--- 2. DNF Representation (Semantics)
---------------------------------------------------------------------------------
-
--- A Literal is either a dimension (i) or its negation (¬i).
 data Literal = Pos Int | NegVar Int deriving (Eq, Ord)
 
 instance Show Literal where
     show (Pos n)    = "i" ++ show n
     show (NegVar n) = "¬i" ++ show n
 
--- A Cube is a conjunction of literals: (L1 ∧ L2 ∧ ...)
 type Cube = Set Literal
-
--- DNF is a disjunction of cubes: (Cube1 ∨ Cube2 ∨ ...)
 newtype DNF = DNF { getCubes :: Set Cube } deriving (Eq, Ord)
 
 instance Show DNF where
@@ -41,87 +31,107 @@ instance Show DNF where
         | Set.null (Set.findMin cs) && Set.size cs == 1 = "1"
         | otherwise = intercalate " ∨ " (map showCube (Set.toList cs))
       where
-        showCube c 
-            | Set.null c = "1"
-            | otherwise  = "(" ++ intercalate " ∧ " (map show (Set.toList c)) ++ ")"
-        intercalate sep = foldr (\x acc -> if acc == "" then x else x ++ sep ++ acc) ""
+        showCube c = if Set.null c then "1" else "(" ++ intercalate " ∧ " (map show (Set.toList c)) ++ ")"
 
 --------------------------------------------------------------------------------
--- 3. DNF Algebra Operations
+-- 2. Lambda Calculus Syntax
 --------------------------------------------------------------------------------
 
--- | Simplifies by Subsumption: A ∨ (A ∧ B) = A
--- We remove any cube that is a superset of another cube.
+-- | Names for lambda variables
+type Name = String
+
+data Term
+    = TVar Name             -- Standard Lambda Variable
+    | TApp Term Term        -- Application (f x)
+    | TAbs Name Term        -- Lambda Abstraction (λx. t)
+    | TInterval I           -- An embedded Interval expression
+    | TCube DNF             -- An evaluated Interval (normalized)
+    deriving (Show)
+
+--------------------------------------------------------------------------------
+-- 3. Evaluation & Substitution
+--------------------------------------------------------------------------------
+
+-- | Simple substitution for Lambda Calculus: t[x := s]
+subst :: Name -> Term -> Term -> Term
+subst x s t = case t of
+    TVar y      | x == y    -> s
+                | otherwise -> TVar y
+    TApp f a                -> TApp (subst x s f) (subst x s a)
+    TAbs y body | x == y    -> TAbs y body -- Shadowing
+                | otherwise -> TAbs y (subst x s body)
+    TInterval i             -> TInterval i
+    TCube c                 -> TCube c
+
+-- | Normalizes both the Lambda structure and the Interval logic
+evalTerm :: Term -> Term
+evalTerm (TVar x) = TVar x
+evalTerm (TAbs x t) = TAbs x (evalTerm t)
+evalTerm (TApp f a) = 
+    case evalTerm f of
+        TAbs x body -> evalTerm (subst x (evalTerm a) body)
+        f'          -> TApp f' (evalTerm a)
+evalTerm (TInterval i) = TCube (evalInterval i) -- Normalize interval logic here
+evalTerm (TCube c)     = TCube c
+
+--------------------------------------------------------------------------------
+-- 4. Interval Algebra (Refactored from your code)
+--------------------------------------------------------------------------------
+
 simplify :: Set Cube -> Set Cube
-simplify cubes = Set.filter (\c -> not $ any (isStrictSubsetOf c) cubes) cubes
-  where isStrictSubsetOf a b = a /= b && a `Set.isSubsetOf` b
+simplify cubes = Set.filter (\c -> not $ any (\other -> c /= other && other `Set.isSubsetOf` c) cubes) cubes
 
-dnfJoin :: DNF -> DNF -> DNF
+evalInterval :: I -> DNF
+evalInterval I0          = DNF Set.empty
+evalInterval I1          = DNF (Set.singleton Set.empty)
+evalInterval (IVar n)    = DNF (Set.singleton (Set.singleton (Pos n)))
+evalInterval (Neg i)     = dnfNeg (evalInterval i)
+evalInterval (Meet i j)  = dnfMeet (evalInterval i) (evalInterval j)
+evalInterval (Join i j)  = dnfJoin (evalInterval i) (evalInterval j)
+
 dnfJoin (DNF a) (DNF b) = DNF $ simplify (Set.union a b)
-
-dnfMeet :: DNF -> DNF -> DNF
-dnfMeet (DNF as) (DNF bs) = 
-    DNF $ simplify $ Set.fromList 
-    [ Set.union a b | a <- Set.toList as, b <- Set.toList bs ]
-
-dnfNeg :: DNF -> DNF
+dnfMeet (DNF as) (DNF bs) = DNF $ simplify $ Set.fromList [ Set.union a b | a <- Set.toList as, b <- Set.toList bs ]
 dnfNeg (DNF cubes) 
-    | Set.null cubes = dnfTrue
-    | otherwise = foldr dnfMeet dnfTrue (map negCube (Set.toList cubes))
+    | Set.null cubes = DNF $ Set.singleton Set.empty
+    | otherwise = foldr dnfMeet (DNF $ Set.singleton Set.empty) (map negCube (Set.toList cubes))
   where
     negCube c = DNF $ Set.fromList [Set.singleton (negLit l) | l <- Set.toList c]
-    negLit (Pos n)    = NegVar n
+    negLit (Pos n) = NegVar n
     negLit (NegVar n) = Pos n
-    dnfTrue = DNF $ Set.singleton Set.empty
 
 --------------------------------------------------------------------------------
--- 4. Evaluation and Normalization
---------------------------------------------------------------------------------
-
-eval :: I -> DNF
-eval I0         = DNF Set.empty
-eval I1         = DNF (Set.singleton Set.empty)
-eval (Var n)    = DNF (Set.singleton (Set.singleton (Pos n)))
-eval (Neg i)    = dnfNeg (eval i)
-eval (Meet i j) = dnfMeet (eval i) (eval j)
-eval (Join i j) = dnfJoin (eval i) (eval j)
-
--- | Normalizing an expression means converting it to DNF and back to Syntax
--- Or simply comparing their DNF forms.
-normalize :: I -> DNF
-normalize = eval
-
---------------------------------------------------------------------------------
--- 5. Main Execution & Tests
+-- 5. Demonstration
 --------------------------------------------------------------------------------
 
 main :: IO ()
 main = do
-    let i = Var 0
-    let j = Var 1
+    putStrLn "=== Lambda Calculus + Cubical Intervals ==="
 
-    putStrLn "=== De Morgan DNF Tests ==="
+    -- Define an interval expression: (i0 ∨ ¬i0)
+    let intervalExpr = Join (IVar 0) (Neg (IVar 0))
     
-    -- Idempotence: i ∨ i = i
-    putStrLn $ "i ∨ i           -> " ++ show (normalize (Join i i))
-    
-    -- Absorption: i ∨ (i ∧ j) = i
-    putStrLn $ "i ∨ (i ∧ j)     -> " ++ show (normalize (Join i (Meet i j)))
-    
-    -- De Morgan: ¬(i ∧ j) = ¬i ∨ ¬j
-    putStrLn $ "¬(i ∧ j)        -> " ++ show (normalize (Neg (Meet i j)))
-    
-    -- Double Negation: ¬¬i = i
-    putStrLn $ "¬¬i             -> " ++ show (normalize (Neg (Neg i)))
-    
-    -- Complex: (i ∨ 1) ∧ j = j
-    putStrLn $ "(i ∨ 1) ∧ j     -> " ++ show (normalize (Meet (Join i I1) j))
+    -- Define a lambda: λx. (x ∧ i1)
+    -- In cubical terms, this could represent a path transformation
+    let lambdaPath = TAbs "x" (TApp (TVar "x") (TInterval I1))
 
-    putStrLn "\n=== Cubical Connections ==="
-    -- connAnd i j = i ∧ j
-    let connAnd = Meet i j
-    putStrLn $ "Connection And  -> " ++ show (normalize connAnd)
+    -- Example 1: Identity Application
+    -- (λx. x) (i0 ∨ ¬i0)
+    let identity = TAbs "x" (TVar "x")
+    let test1 = TApp identity (TInterval intervalExpr)
     
-    -- connOr i j = i ∨ j
-    let connOr = Join i j
-    putStrLn $ "Connection Or   -> " ++ show (normalize connOr)
+    putStrLn $ "Input:  (λx. x) (i0 ∨ ¬i0)"
+    putStrLn $ "Result: " ++ show (evalTerm test1)
+
+    -- Example 2: Constant Function
+    -- (λx. i0) (i1)
+    let constFunc = TAbs "x" (TInterval I0)
+    let test2 = TApp constFunc (TInterval I1)
+    
+    putStrLn $ "\nInput:  (λx. i0) (i1)"
+    putStrLn $ "Result: " ++ show (evalTerm test2)
+
+    -- Example 3: Nested Normalization
+    -- Applying a double negation to a variable within a lambda
+    let test3 = TInterval (Neg (Neg (IVar 5)))
+    putStrLn $ "\nInput:  ¬¬i5"
+    putStrLn $ "Result: " ++ show (evalTerm test3)
