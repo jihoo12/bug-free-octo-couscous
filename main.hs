@@ -130,5 +130,7 @@ main = do
     case typeOf ctx badTerm of
         Right t -> putStrLn $ "Success! Type: " ++ show (reduce t)
         Left e  -> putStrLn $ "Expected Failure: " ++ e
+        
 -- current goal 
 -- implement Inductive Types
+-- switch to cubical type theory 
