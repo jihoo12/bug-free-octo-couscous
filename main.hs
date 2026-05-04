@@ -31,7 +31,8 @@ shift d c (Lam x t e) = Lam x (shift d c t) (shift d (c + 1) e)
 shift d c (Pi x t b)  = Pi x (shift d c t) (shift d (c + 1) b)
 shift _ _ Kind        = Kind
 shift _ _ Box         = Box
-
+-- if i < c then bound variable
+-- if i >= c then free variable need +1 to c 
 -- substitute j n m: replaces index j in m with term n
 substitute :: Index -> Term -> Term -> Term
 substitute j n (Var i)
