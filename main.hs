@@ -25,6 +25,11 @@ data Term
     | INot Term             
     | Partial Term Term      
     | Side Term [(Term, Term)] 
+    | Comp Term Term Term  -- comp : (A : I -> Type) -> (phi : I) -> (u : Partial phi A) -> (A 0)
+    | Sigma Name Term Term
+    | Pair Term Term
+    | Fst Term
+    | Snd Term
     deriving (Eq)
 
 instance Show Term where
@@ -65,6 +70,11 @@ shift d c (Side phi bs)    = Side (shift d c phi) [(shift d c p, shift d c t) | 
 shift d c (IAnd p q)       = IAnd (shift d c p) (shift d c q)
 shift d c (IOr p q)        = IOr (shift d c p) (shift d c q)
 shift d c (INot p)         = INot (shift d c p)
+shift d c (Comp a phi u) = Comp (shift d c a) (shift d c phi) (shift d c u)
+shift d c (Sigma x a b) = Sigma x (shift d c a) (shift d (c + 1) b)
+shift d c (Pair t1 t2)  = Pair (shift d c t1) (shift d c t2)
+shift d c (Fst t)       = Fst (shift d c t)
+shift d c (Snd t)       = Snd (shift d c t)
 shift _ _ t                = t
 
 substitute :: Index -> Term -> Term -> Term
@@ -85,6 +95,15 @@ substitute j n (Side p bs)   = Side (substitute j n p) [(substitute j n bp, subs
 substitute j n (IAnd p q)    = IAnd (substitute j n p) (substitute j n q)
 substitute j n (IOr p q)     = IOr (substitute j n p) (substitute j n q)
 substitute j n (INot p)      = INot (substitute j n p)
+substitute j n (Comp a phi u) = Comp (substitute j n a) (substitute j n phi) (substitute j n u)
+substitute j n (Sigma x a b) = 
+    Sigma x (substitute j n a) (substitute (j + 1) (shift 1 0 n) b)
+substitute j n (Pair t1 t2)  = 
+    Pair (substitute j n t1) (substitute j n t2)
+substitute j n (Fst t)       = 
+    Fst (substitute j n t)
+substitute j n (Snd t)       = 
+    Snd (substitute j n t)
 substitute _ _ t = t
 
 -- 2. Evaluation
@@ -149,7 +168,107 @@ reduce (Side p bs)   = Side (reduceFormula p) [(reduceFormula bp, reduce bt) | (
 reduce (IAnd p q)    = reduceFormula (IAnd p q)
 reduce (IOr p q)     = reduceFormula (IOr p q)
 reduce (INot p)      = reduceFormula (INot p)
+reduce (Comp a phi u) =
+    let a'   = reduce a
+        phi' = reduceFormula phi
+        u'   = reduce u
+    in case phi' of
+        I1 -> reduce (PApp u' I1)
+        _  -> case reduce (App a' I0) of
+            Universe _ -> a' 
+            Pi x b c   -> 
+                -- We return: λx. comp (\i. c (fill b phi (\_. x) (not i))) phi (\i. u i (fill b phi (\_. x) (not i)))
+                -- Note: This requires careful handling of De Bruijn indices.
+                let 
+                    -- b is the domain: I -> Type
+                    -- c is the codomain: I -> b i -> Type
+                    -- fillB = fill b phi (\_. x) (not i)
+                    fillB i = Comp (PLam Interval (App (shift 2 0 b) (IAnd i (Var 0)))) 
+                                   (IOr (shift 2 0 phi') (INot (Var 0)))
+                                   (Side (IOr (shift 2 0 phi') (INot (Var 0))) 
+                                      [(shift 2 0 phi', Var 1), (INot (Var 0), Var 1)])
+                    
+                    -- The new path of types for the codomain composition
+                    codomainPath = PLam Interval $ 
+                        substitute 0 (fillB (INot (Var 0))) (shift 1 1 c)
+                    
+                    -- The new partial element
+                    partialU = PLam Interval $ 
+                        App (PApp (shift 1 0 u') (Var 0)) (fillB (INot (Var 0)))
+                in 
+                Lam x (App (shift 1 0 b) I0) (Comp codomainPath (shift 1 0 phi') partialU)
+            -- Case: Sigma Types (Pairing)
+            -- A composition in a Sigma type is a pair of compositions.
+            Sigma x b c ->
+                let 
+                    -- u1 = \i. fst (u i)
+                    u1 = PLam Interval (Fst (PApp (shift 1 0 u') (Var 0)))
+                    -- comp1 = comp (\i. b i) phi u1
+                    comp1 = Comp (PLam Interval (App (shift 1 0 b) (Var 0))) phi' u1
+                    
+                    -- fill1 = fill (\i. b i) phi u1
+                    fill1 = fill (PLam Interval (App (shift 1 0 b) (Var 0))) phi' u1
+                    
+                    -- The type for the second component depends on the fill of the first
+                    -- c' = \i. c i (fill1 i)
+                    c' = PLam Interval $ substitute 0 
+                            (PApp (shift 1 0 fill1) (Var 0)) 
+                            (shift 1 1 c)
+                    
+                    -- u2 = \i. snd (u i)
+                    u2 = PLam Interval (Snd (PApp (shift 1 0 u') (Var 0)))
+                in Pair comp1 (Comp c' phi' u2)
+
+            -- Case: Path Types
+            -- A composition in a PathP is a swap of dimensions.
+            PathP aP xP yP ->
+                -- aP : I -> I -> Type. We introduce a new dimension 'j'.
+                -- We return a PLam j. comp (\i. aP i j) (phi OR (j=0) OR (j=1)) ...
+                let 
+                    phiPath = IOr phi' (IOr (INot (Var 0)) (Var 0))
+                    aPath = PLam Interval $ PLam Interval $ 
+                                PApp (App (shift 2 0 aP) (Var 1)) (Var 0)
+                    
+                    -- The sides for the internal composition include the original u
+                    -- and the boundaries of the PathP (xP and yP)
+                    uPath = Side phiPath 
+                        [ (shift 1 0 phi', PApp (shift 1 0 u') (Var 0))
+                        , (INot (Var 0), shift 1 0 xP)
+                        , (Var 0, shift 1 0 yP)
+                        ]
+                in PLam (App (shift 1 0 aP) I1) (Comp aPath phiPath uPath)
+
+            -- Case: Glue Types
+            -- This is the most complex: it involves ungluing, composing in the base,
+            -- and then re-gluing using the partial equivalences.
+            Glue b phiG f ->
+                let
+                    -- 1. Unglue the partial element u
+                    ungluedU = PLam Interval (Unglue (PApp (shift 1 0 u') (Var 0)) (shift 1 0 phiG))
+                    -- 2. Compose in the base type b
+                    compBase = Comp (PLam Interval (App (shift 1 0 b) (Var 0))) phi' ungluedU
+                    -- 3. In a full implementation, you'd apply the "Glue" composition 
+                    -- algorithm involving the fiber of 'f'. 
+                in Total phi' (Side phi' [(phi', PApp u' I1)]) compBase
+            _ -> Comp a' phi' u' -- Add cases for Sigma, PathP, Glue, etc.
 reduce x             = x
+
+fill :: Term -> Term -> Term -> Term
+fill a phi u = 
+    -- We introduce a new dimension 'j' (Var 0)
+    -- a' = \j -> a (i AND j)
+    -- phi' = phi OR (i == 0)
+    -- This is often simplified in implementations by just shifting and wrapping.
+    -- For the Pi case specifically, we need the term:
+    PLam a (Comp 
+        (PLam Interval (App (shift 1 0 a) (IAnd (Var 1) (Var 0)))) 
+        (IOr (shift 1 0 phi) (INot (Var 0))) 
+        (Side (IOr (shift 1 0 phi) (INot (Var 0))) 
+            [ (shift 1 0 phi, PApp (shift 1 0 u) (Var 0))
+            , (INot (Var 0), PApp (shift 1 0 u) I0)
+            ]
+        )
+    )
 
 betaEquals :: Term -> Term -> Bool
 betaEquals t1 t2 = reduce t1 == reduce t2
@@ -268,6 +387,21 @@ typeOf ctx (Unglue t phi) = do
     case reduce tt of
         Glue b _ _ -> Right b
         _ -> Left "Unglue expects a Glue type"
+
+typeOf ctx (Comp a phi u) = do
+    ta <- typeOf ctx a
+    case reduce ta of
+        Pi _ Interval (Universe _) -> do
+            if not (isFormula ctx phi) 
+                then Left "comp: phi must be a formula"
+                else do
+                    tu <- typeOf ctx u
+                    -- u must be a Partial phi (a i)
+                    case reduce tu of
+                        Partial p _ | betaEquals p phi -> 
+                            Right (reduce (App a I0))
+                        _ -> Left "comp: partial element mismatch"
+        _ -> Left "comp: first argument must be a path of types (I -> Type)"
 
 -- 4. Main Execution
 main :: IO ()
