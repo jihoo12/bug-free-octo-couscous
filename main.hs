@@ -120,3 +120,7 @@ main = do
             putStrLn $ "Term: " ++ show testTerm
             putStrLn $ "Success! Type: " ++ show (reduce t)
         Left e  -> putStrLn $ "Error: " ++ e
+
+-- current goal 
+-- implement Inductive Types
+-- implement Consistency checker
