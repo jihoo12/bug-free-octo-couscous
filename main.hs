@@ -423,6 +423,3 @@ main = do
     let f2 = IOr (IAnd I1 I1) I0
     putStrLn $ "Formula 1 (1 ∧ 0): " ++ show (reduceFormula f1)
     putStrLn $ "Formula 2 ((1 ∧ 1) ∨ 0): " ++ show (reduceFormula f2)
-
--- current goal 
--- composition
