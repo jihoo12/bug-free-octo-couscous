@@ -14,7 +14,15 @@ data I
     = I0 | I1 
     | IVar Int 
     | Meet I I | Join I I | Neg I
-    deriving (Show, Eq, Ord)
+    deriving (Eq, Ord)
+
+instance Show I where
+    show I0 = "0"
+    show I1 = "1"
+    show (IVar n) = "i" ++ show n
+    show (Meet i j) = "(" ++ show i ++ " ∧ " ++ show j ++ ")"
+    show (Join i j) = "(" ++ show i ++ " ∨ " ++ show j ++ ")"
+    show (Neg i) = "¬" ++ show i
 
 data Literal = Pos Int | NegVar Int deriving (Eq, Ord)
 
@@ -48,8 +56,12 @@ data Term
     -- Dependent Types (Pi Types)
     | TPi Name Term Term    -- Π(x:A). B
     -- Cubical Additions
-    | TInterval I
-    | TCube DNF
+    | TInterval I           -- Symbolic Interval
+    | TCube DNF             -- Normalized Interval
+    -- Path Types
+    | TPath Term Term Term  -- Path A u v
+    | PLam Name Term        -- ⟨i⟩ t (Path abstraction)
+    | PApp Term Term        -- t @ r (Path application)
     deriving (Eq)
 
 instance Show Term where
@@ -61,6 +73,9 @@ instance Show Term where
         TPi x a b   -> "Π(" ++ x ++ ":" ++ show a ++ "). " ++ show b
         TInterval i -> show i
         TCube c     -> show c
+        TPath a u v -> "Path " ++ show a ++ " " ++ show u ++ " " ++ show v
+        PLam i t    -> "⟨" ++ i ++ "⟩ " ++ show t
+        PApp t r    -> show t ++ " @ " ++ show r
 
 --------------------------------------------------------------------------------
 -- 3. Evaluation & Substitution
@@ -79,16 +94,29 @@ subst x s term = case term of
     TUniv n                 -> TUniv n
     TInterval i             -> TInterval i
     TCube c                 -> TCube c
+    TPath a u v             -> TPath (subst x s a) (subst x s u) (subst x s v)
+    PLam i t    | x == i    -> PLam i t
+                | otherwise -> PLam i (subst x s t)
+    PApp t r                -> PApp (subst x s t) (subst x s r)
 
--- | Normalizes terms to Weak Head Normal Form / Normal Form
+-- | Normalizes terms to Normal Form
 eval :: Term -> Term
 eval t = case t of
     TApp f a -> 
         case eval f of
             TAbs x body -> eval (subst x (eval a) body)
             f'          -> TApp f' (eval a)
+    
+    -- Path Beta-reduction: (⟨i⟩ t) @ r  ==>  t[i := r]
+    PApp t r ->
+        case eval t of
+            PLam i body -> eval (subst i (eval r) body)
+            t'          -> PApp t' (eval r)
+
     TAbs x b    -> TAbs x (eval b)
     TPi x a b   -> TPi x (eval a) (eval b)
+    TPath a u v -> TPath (eval a) (eval u) (eval v)
+    PLam i b    -> PLam i (eval b)
     TInterval i -> TCube (evalInterval i)
     _           -> t
 
@@ -123,30 +151,40 @@ dnfNeg (DNF cubes)
 
 main :: IO ()
 main = do
-    putStrLn "=== Cubical Lambda Calculus with Universes ==="
+    putStrLn "=== Cubical Lambda Calculus with Path Types ==="
 
-    -- 1. Identity function for a type in U0
-    -- id : Π(A:U0). Π(x:A). A
+    -- 1. Identity function (Standard Pi Type)
     let idType = TPi "A" (TUniv 0) (TPi "x" (TVar "A") (TVar "A"))
     let idTerm = TAbs "A" (TAbs "x" (TVar "x"))
     
     putStrLn $ "\nIdentity Type: " ++ show idType
     putStrLn $ "Identity Term: " ++ show idTerm
 
-    -- 2. Applying identity to a Universe
-    -- ((λA. λx. x) U0) -> λx. x
-    let testUniv = TApp idTerm (TUniv 0)
-    putStrLn $ "\nApplying id to U0:"
-    putStrLn $ "Result: " ++ show (eval testUniv)
+    -- 2. Reflexivity (Path Type)
+    -- refl : Π(A:U0). Π(x:A). Path A x x
+    -- refl = λA. λx. ⟨i⟩ x
+    let refl = TAbs "A" (TAbs "x" (PLam "i" (TVar "x")))
+    putStrLn $ "\nReflexivity (refl): " ++ show refl
 
-    -- 3. Path-like type: A function from the interval to a universe
-    -- This represents a "Line" of types: Π(i:I). U0
-    let lineType = TPi "i" (TInterval (IVar 0)) (TUniv 0)
-    putStrLn $ "\nLine of Types (Path in U0): " ++ show lineType
+    -- 3. Path Application
+    -- Applying refl to a type and term, then applying an interval
+    -- (refl U0 T) @ 0
+    let testPath = PApp (TApp (TApp refl (TUniv 0)) (TVar "T")) (TInterval I0)
+    putStrLn $ "\nEvaluating (refl U0 T) @ 0:"
+    putStrLn $ "Result: " ++ show (eval testPath)
 
-    -- 4. Cubical Normalization inside types
-    -- Π(x : ¬¬i0). U0  ==> Π(x : i0). U0
-    let nestedLogic = TPi "x" (TInterval (Neg (Neg (IVar 0)))) (TUniv 0)
-    putStrLn $ "\nNormalized Interval in Pi-binder:"
-    putStrLn $ "Input:  " ++ show nestedLogic
-    putStrLn $ "Result: " ++ show (eval nestedLogic)
+    -- 4. De Morgan in the Interval (Normalized inside a Path)
+    -- ⟨i⟩ Path A (¬(i0 ∨ i1)) (¬i0 ∧ ¬i1)
+    let deMorganLHS = Neg (Join (IVar 0) (IVar 1))
+    let deMorganRHS = Meet (Neg (IVar 0)) (Neg (IVar 1))
+    let pathDeMorgan = TPath (TUniv 0) (TInterval deMorganLHS) (TInterval deMorganRHS)
+    
+    putStrLn $ "\nNormalized De Morgan Interval in Type:"
+    putStrLn $ "Raw: " ++ show pathDeMorgan
+    putStrLn $ "Normalized: " ++ show (eval pathDeMorgan)
+
+    -- 5. Symmetry (Function that flips a path)
+    -- sym : Π(A:U0). Π(x y: A). Path A x y -> Path A y x
+    -- sym = λA. λx. λy. λp. ⟨i⟩ p @ ¬i
+    let sym = TAbs "A" (TAbs "x" (TAbs "y" (TAbs "p" (PLam "i" (PApp (TVar "p") (TInterval (Neg (IVar 0))))))))
+    putStrLn $ "\nSymmetry term: " ++ show sym
