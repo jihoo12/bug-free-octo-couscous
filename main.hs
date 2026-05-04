@@ -1,4 +1,3 @@
--- Remove unused import to clear blue HLS warning
 module Main where
 
 type Name = String
