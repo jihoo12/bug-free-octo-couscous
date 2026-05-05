@@ -68,19 +68,52 @@ data Term
     -- Kan Composition
     | THComp Term Term Term Term
     -- hcomp A φ u u₀
-    --   A  : Term  — the type being filled
-    --   φ  : Term  — the face/cofibration (an interval/𝕀 term)
-    --   u  : Term  — the "tube" (PLam i body, where body : A for all i, defined on φ)
-    --   u₀ : Term  — the base cap (element of A, agreeing with u@0 when φ holds)
+    --
+    -- Glue Types
+    | TGlue Term Term Term
+    -- Glue A φ T_e
+    --   A   : Term  — the base type
+    --   φ   : Term  — the face/cofibration (interval term)
+    --   T_e : Term  — a partial element of Σ(T:U). Equiv T A, defined on φ
     --
     -- Typing rule:
-    --   Γ ⊢ A : U_n   Γ ⊢ φ : 𝕀   Γ,i:𝕀 ⊢ u : A   Γ ⊢ u₀ : A
-    --   ────────────────────────────────────────────────────────────
-    --   Γ ⊢ hcomp A φ u u₀ : A
+    --   Γ ⊢ A : U_n   Γ ⊢ φ : 𝕀   Γ,φ ⊢ T_e : Σ(T:U_n). Equiv T A
+    --   ──────────────────────────────────────────────────────────────
+    --   Γ ⊢ Glue A φ T_e : U_n
     --
     -- β-rules:
-    --   hcomp A ⊤ (⟨i⟩ t) u₀  ≡  t[i:=1]
-    --   hcomp A ⊥ (⟨i⟩ t) u₀  ≡  u₀
+    --   Glue A ⊤ (T, e)  ≡  T
+    --   Glue A ⊥ _       ≡  A
+    --
+    | TGlueElem Term Term Term
+    -- glue φ t a
+    --   φ : Term  — the face
+    --   t : Term  — partial element of T (defined on φ)
+    --   a : Term  — element of A (base type)
+    --
+    -- Typing rule:
+    --   Γ ⊢ φ : 𝕀   Γ,φ ⊢ t : T   Γ ⊢ a : A   φ ⊢ e(t) ≡ a
+    --   ────────────────────────────────────────────────────────
+    --   Γ ⊢ glue φ t a : Glue A φ (T, e)
+    --
+    -- β-rules:
+    --   glue ⊤ t a  ≡  t
+    --   glue ⊥ t a  ≡  a
+    --
+    | TUnglue Term Term Term
+    -- unglue φ T_e g
+    --   φ   : Term  — the face
+    --   T_e : Term  — partial (T, e) defined on φ
+    --   g   : Term  — element of Glue A φ T_e
+    --
+    -- Typing rule:
+    --   Γ ⊢ g : Glue A φ T_e
+    --   ─────────────────────
+    --   Γ ⊢ unglue φ T_e g : A
+    --
+    -- β-rules:
+    --   unglue ⊤ (T, e) g  ≡  e(g)   (apply the equivalence)
+    --   unglue ⊥ _      g  ≡  g      (g already lives in A)
     deriving (Eq)
 
 instance Show Term where
@@ -100,6 +133,18 @@ instance Show Term where
             ++ " [" ++ show phi ++ "] "
             ++ "(" ++ show u ++ ") "
             ++ show u0
+        TGlue a phi te ->
+            "Glue " ++ show a
+            ++ " [" ++ show phi ++ "] "
+            ++ "(" ++ show te ++ ")"
+        TGlueElem phi t a ->
+            "glue [" ++ show phi ++ "] "
+            ++ "(" ++ show t ++ ") "
+            ++ show a
+        TUnglue phi te g ->
+            "unglue [" ++ show phi ++ "] "
+            ++ "(" ++ show te ++ ") "
+            ++ show g
 
 --------------------------------------------------------------------------------
 -- 3. Evaluation & Substitution
@@ -124,6 +169,12 @@ subst x s term = case term of
     PApp t r                -> PApp (subst x s t) (subst x s r)
     THComp a phi u u0       ->
         THComp (subst x s a) (subst x s phi) (subst x s u) (subst x s u0)
+    TGlue a phi te          ->
+        TGlue (subst x s a) (subst x s phi) (subst x s te)
+    TGlueElem phi t a       ->
+        TGlueElem (subst x s phi) (subst x s t) (subst x s a)
+    TUnglue phi te g        ->
+        TUnglue (subst x s phi) (subst x s te) (subst x s g)
 
 -- | Normalizes terms to Normal Form
 eval :: Term -> Term
@@ -164,6 +215,50 @@ eval t = case t of
            -- Otherwise leave it in weak-head-normal form
            else THComp (eval aTy) phi' (eval tube) (eval base)
     -- All remaining constructors are already in normal form
+
+    -- ── Glue Types ──────────────────────────────────────────────────────────────
+    -- β-rules for Glue A φ T_e:
+    --   φ ≡ ⊤  →  Glue reduces to the fibre type T (first component of T_e)
+    --   φ ≡ ⊥  →  Glue reduces to the base type A
+    TGlue aTy phi te ->
+        let phi' = eval phi
+            isTop = phi' == TCube (DNF (Set.singleton Set.empty))
+            isBot = phi' == TCube (DNF Set.empty)
+        in if isTop
+           then eval te          -- Glue A ⊤ T_e  ≡  T_e  (the fibre type on the face)
+           else if isBot
+           then eval aTy         -- Glue A ⊥ _    ≡  A
+           else TGlue (eval aTy) phi' (eval te)
+
+    -- ── glue element introduction ────────────────────────────────────────────────
+    -- β-rules for glue φ t a:
+    --   φ ≡ ⊤  →  glue reduces to the partial element t
+    --   φ ≡ ⊥  →  glue reduces to the base element a
+    TGlueElem phi t a ->
+        let phi' = eval phi
+            isTop = phi' == TCube (DNF (Set.singleton Set.empty))
+            isBot = phi' == TCube (DNF Set.empty)
+        in if isTop
+           then eval t           -- glue ⊤ t a  ≡  t
+           else if isBot
+           then eval a           -- glue ⊥ t a  ≡  a
+           else TGlueElem phi' (eval t) (eval a)
+
+    -- ── unglue element elimination ───────────────────────────────────────────────
+    -- β-rules for unglue φ T_e g:
+    --   φ ≡ ⊤  →  unglue applies the equivalence function e to g
+    --             In this minimal checker we represent e as the identity on T_e
+    --             (a full univalence proof would wire in the actual equiv map)
+    --   φ ≡ ⊥  →  unglue is the identity: g is already in A
+    TUnglue phi te g ->
+        let phi' = eval phi
+            isTop = phi' == TCube (DNF (Set.singleton Set.empty))
+            isBot = phi' == TCube (DNF Set.empty)
+        in if isTop
+           then eval g           -- unglue ⊤ (T,e) g  ≡  e(g)  (identity equiv here)
+           else if isBot
+           then eval g           -- unglue ⊥ _     g  ≡  g
+           else TUnglue phi' (eval te) (eval g)
     _ -> t
 
 --------------------------------------------------------------------------------
@@ -413,6 +508,31 @@ infer _   (TCube _)     = Right intervalTy
 infer _   t@(TAbs _ _) = Left (CannotInfer t)
 infer _   t@(PLam _ _) = Left (CannotInfer t)
 
+-- ─── Glue Type Formation ──────────────────────────────────────────────────────
+-- Γ ⊢ A : U_n    Γ ⊢ φ : 𝕀    Γ, φ ⊢ T_e : U_n
+-- ─────────────────────────────────────────────────
+--        Γ ⊢ Glue A φ T_e : U_n
+--
+-- (In full CCHM T_e should be Σ(T:U_n). Equiv T A; here we simply require
+--  T_e : U_n, trusting the user to supply a proper fibre type.)
+infer ctx (TGlue aTy phi te) = do
+    n  <- requireUniverse ctx aTy
+    checkInterval ctx phi
+    m  <- requireUniverse ctx te
+    return $ TUniv (max n m)
+
+-- ─── Unglue Elimination ───────────────────────────────────────────────────────
+-- Γ ⊢ g : Glue A φ T_e
+-- ────────────────────────
+-- Γ ⊢ unglue φ T_e g : A
+infer ctx (TUnglue phi te g) = do
+    checkInterval ctx phi
+    gTy <- infer ctx g
+    case eval gTy of
+        TGlue aTy _ _ -> return (eval aTy)
+        other         -> Left (Other $
+            "unglue: expected argument of Glue type, got: " ++ show other)
+
 -- ─── Kan Composition ─────────────────────────────────────────────────────────
 -- Γ ⊢ A : U_n    Γ ⊢ φ : 𝕀    Γ, i:𝕀 ⊢ u_body : A    Γ ⊢ u₀ : A
 -- ──────────────────────────────────────────────────────────────────────────────
@@ -486,12 +606,25 @@ check ctx (PLam i body) ty =
             check (extendCtx i intervalTy ctx) body aTy'
         other -> Left (ExpectedPath other)
 
+-- ─── Glue Element Introduction ────────────────────────────────────────────────
+-- Γ ⊢ φ : 𝕀    Γ, φ ⊢ t ⇐ T_e    Γ ⊢ a ⇐ A
+-- ──────────────────────────────────────────────
+--   Γ ⊢ glue φ t a ⇐ Glue A φ T_e
+check ctx (TGlueElem phi t a) ty =
+    case eval ty of
+        TGlue aTy phi' te -> do
+            checkInterval ctx phi
+            requireEqual (eval phi') (eval phi)
+            check ctx t (eval te)
+            check ctx a (eval aTy)
+        other -> Left (Other $
+            "glue: expected Glue type, got: " ++ show other)
+
 -- ─── Subsumption (switch to inference) ───────────────────────────────────────
 -- If we have no special checking rule, infer the type and compare definitionally.
 check ctx t ty = do
     ty' <- infer ctx t
     requireEqual (eval ty) (eval ty')
-
 -- ---------------------------------------------------------------------------
 -- 6f. Top-level helpers
 -- ---------------------------------------------------------------------------
@@ -742,3 +875,101 @@ main = do
     demoEval
     demoTypeCheck
     demoKan
+    demoGlue
+--------------------------------------------------------------------------------
+-- 10. Glue Types Demo
+--------------------------------------------------------------------------------
+
+demoGlue :: IO ()
+demoGlue = do
+    putStrLn "\n=== Glue Types ==="
+
+    -- ── β-rule ⊤: Glue A ⊤ T  ≡  T ──────────────────────────────────────────
+    putStrLn "\n── β-rule (⊤): Glue A ⊤ T  ≡  T ──────────────────────────────"
+    let glueTop = TGlue (TVar "A") (TInterval I1) (TVar "T")
+    putStrLn $ "  Before: " ++ show glueTop
+    putStrLn $ "  After:  " ++ show (eval glueTop)
+
+    -- ── β-rule ⊥: Glue A ⊥ T  ≡  A ──────────────────────────────────────────
+    putStrLn "\n── β-rule (⊥): Glue A ⊥ T  ≡  A ──────────────────────────────"
+    let glueBot = TGlue (TVar "A") (TInterval I0) (TVar "T")
+    putStrLn $ "  Before: " ++ show glueBot
+    putStrLn $ "  After:  " ++ show (eval glueBot)
+
+    -- ── Glue type formation ───────────────────────────────────────────────────
+    --   Glue U0 i T  :  U0
+    --   In context {i : 𝕀, T : U0, A : U0}
+    putStrLn "\n── Glue Type Formation ─────────────────────────────────────────"
+    let ctxGlue = [("T", TUniv 0), ("A", TUniv 0), ("i", intervalTy)]
+    let glueTy  = TGlue (TVar "A") (TVar "i") (TVar "T")
+    case infer ctxGlue glueTy of
+        Right ty -> putStrLn $
+            "  ✓  Glue A i T  (in context A:U0, T:U0, i:𝕀)\n       : " ++ show ty
+        Left err -> putStrLn $ "  ✗  " ++ show err
+
+    -- ── glue element β-rule ⊤ ─────────────────────────────────────────────────
+    --   glue ⊤ t a  ≡  t
+    putStrLn "\n── glue β-rule (⊤): glue ⊤ t a  ≡  t ─────────────────────────"
+    let glueElemTop = TGlueElem (TInterval I1) (TVar "t") (TVar "a")
+    putStrLn $ "  Before: " ++ show glueElemTop
+    putStrLn $ "  After:  " ++ show (eval glueElemTop)
+
+    -- ── glue element β-rule ⊥ ─────────────────────────────────────────────────
+    --   glue ⊥ t a  ≡  a
+    putStrLn "\n── glue β-rule (⊥): glue ⊥ t a  ≡  a ─────────────────────────"
+    let glueElemBot = TGlueElem (TInterval I0) (TVar "t") (TVar "a")
+    putStrLn $ "  Before: " ++ show glueElemBot
+    putStrLn $ "  After:  " ++ show (eval glueElemBot)
+
+    -- ── Checking a glue element ───────────────────────────────────────────────
+    --   Given: A : U0, T : U0, t : T, a : A
+    --   Check: glue i t a  :  Glue A i T   (in context with i:𝕀)
+    putStrLn "\n── glue Element Checking ───────────────────────────────────────"
+    let ctxElem  = [ ("a", TVar "A"), ("t", TVar "T")
+                   , ("T", TUniv 0), ("A", TUniv 0), ("i", intervalTy) ]
+    let elemTm   = TGlueElem (TVar "i") (TVar "t") (TVar "a")
+    let elemTy   = TGlue (TVar "A") (TVar "i") (TVar "T")
+    case check ctxElem elemTm elemTy of
+        Right () -> putStrLn $
+            "  ✓  glue i t a  :  Glue A i T   (in context A:U0, T:U0, t:T, a:A, i:𝕀)"
+        Left err -> putStrLn $ "  ✗  " ++ show err
+
+    -- ── unglue β-rule ⊤ ──────────────────────────────────────────────────────
+    --   unglue ⊤ T_e g  ≡  g
+    putStrLn "\n── unglue β-rule (⊤): unglue ⊤ T_e g  ≡  g ───────────────────"
+    let unglueTop = TUnglue (TInterval I1) (TVar "T") (TVar "g")
+    putStrLn $ "  Before: " ++ show unglueTop
+    putStrLn $ "  After:  " ++ show (eval unglueTop)
+
+    -- ── unglue β-rule ⊥ ──────────────────────────────────────────────────────
+    --   unglue ⊥ T_e g  ≡  g
+    putStrLn "\n── unglue β-rule (⊥): unglue ⊥ T_e g  ≡  g ───────────────────"
+    let unglueBot = TUnglue (TInterval I0) (TVar "T") (TVar "g")
+    putStrLn $ "  Before: " ++ show unglueBot
+    putStrLn $ "  After:  " ++ show (eval unglueBot)
+
+    -- ── unglue type inference ─────────────────────────────────────────────────
+    --   Given: g : Glue A i T   (in context with i:𝕀, A:U0, T:U0)
+    --   Infer: unglue i T g  :  A
+    putStrLn "\n── unglue Type Inference ───────────────────────────────────────"
+    let ctxUnglue = [ ("g", TGlue (TVar "A") (TVar "i") (TVar "T"))
+                    , ("T", TUniv 0), ("A", TUniv 0), ("i", intervalTy) ]
+    let unglueTm  = TUnglue (TVar "i") (TVar "T") (TVar "g")
+    case infer ctxUnglue unglueTm of
+        Right ty -> putStrLn $
+            "  ✓  unglue i T g  (in context)\n       : " ++ show ty
+        Left err -> putStrLn $ "  ✗  " ++ show err
+
+    -- ── Stuck Glue (neutral face) ─────────────────────────────────────────────
+    --   When φ is a free variable the Glue type stays in normal form.
+    putStrLn "\n── Stuck Glue (neutral φ = free variable) ──────────────────────"
+    let stuckGlue = TGlue (TVar "A") (TVar "i") (TVar "T")
+    putStrLn $ "  Glue A i T  normalises to:  " ++ show (eval stuckGlue)
+
+    -- ── Round-trip: unglue ∘ glue  ≡  id on A ────────────────────────────────
+    --   unglue ⊥ T (glue ⊥ t a)  ≡  a   (both sides reduce)
+    putStrLn "\n── Round-trip: unglue ⊥ T (glue ⊥ t a)  ≡  a ─────────────────"
+    let roundTrip = TUnglue (TInterval I0) (TVar "T")
+                             (TGlueElem (TInterval I0) (TVar "t") (TVar "a"))
+    putStrLn $ "  Before: " ++ show roundTrip
+    putStrLn $ "  After:  " ++ show (eval roundTrip)
