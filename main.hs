@@ -65,6 +65,22 @@ data Term
     | TPath Term Term Term  -- Path A u v
     | PLam Name Term        -- ⟨i⟩ t  (Path abstraction, binds interval name i)
     | PApp Term Term        -- t @ r  (Path application)
+    -- Kan Composition
+    | THComp Term Term Term Term
+    -- hcomp A φ u u₀
+    --   A  : Term  — the type being filled
+    --   φ  : Term  — the face/cofibration (an interval/𝕀 term)
+    --   u  : Term  — the "tube" (PLam i body, where body : A for all i, defined on φ)
+    --   u₀ : Term  — the base cap (element of A, agreeing with u@0 when φ holds)
+    --
+    -- Typing rule:
+    --   Γ ⊢ A : U_n   Γ ⊢ φ : 𝕀   Γ,i:𝕀 ⊢ u : A   Γ ⊢ u₀ : A
+    --   ────────────────────────────────────────────────────────────
+    --   Γ ⊢ hcomp A φ u u₀ : A
+    --
+    -- β-rules:
+    --   hcomp A ⊤ (⟨i⟩ t) u₀  ≡  t[i:=1]
+    --   hcomp A ⊥ (⟨i⟩ t) u₀  ≡  u₀
     deriving (Eq)
 
 instance Show Term where
@@ -79,6 +95,11 @@ instance Show Term where
         TPath a u v -> "Path " ++ show a ++ " " ++ show u ++ " " ++ show v
         PLam i t    -> "⟨" ++ i ++ "⟩ " ++ show t
         PApp t r    -> show t ++ " @ " ++ show r
+        THComp a phi u u0 ->
+            "hcomp " ++ show a
+            ++ " [" ++ show phi ++ "] "
+            ++ "(" ++ show u ++ ") "
+            ++ show u0
 
 --------------------------------------------------------------------------------
 -- 3. Evaluation & Substitution
@@ -101,6 +122,8 @@ subst x s term = case term of
     PLam i t    | x == i    -> PLam i t
                 | otherwise -> PLam i (subst x s t)
     PApp t r                -> PApp (subst x s t) (subst x s r)
+    THComp a phi u u0       ->
+        THComp (subst x s a) (subst x s phi) (subst x s u) (subst x s u0)
 
 -- | Normalizes terms to Normal Form
 eval :: Term -> Term
@@ -121,7 +144,27 @@ eval t = case t of
     TPath a u v -> TPath (eval a) (eval u) (eval v)
     PLam i b    -> PLam i (eval b)
     TInterval i -> TCube (evalInterval i)
-    _           -> t
+
+    -- ── Kan Composition ────────────────────────────────────────────────────────
+    -- Evaluate the face formula first; apply the two β-rules when φ is ⊤ or ⊥.
+    THComp aTy phi tube base ->
+        let phi' = eval phi
+            -- φ ≡ ⊤  iff  its DNF is the single empty-conjunction cube {∅}
+            isTop = phi' == TCube (DNF (Set.singleton Set.empty))
+            -- φ ≡ ⊥  iff  its DNF has no cubes at all
+            isBot = phi' == TCube (DNF Set.empty)
+        in if isTop
+           -- β-rule (⊤): hcomp A ⊤ (⟨i⟩ t) u₀  ≡  t[i := 1]
+           then case eval tube of
+                    PLam i body -> eval (subst i (TInterval I1) body)
+                    tube'       -> PApp tube' (TInterval I1)
+           else if isBot
+           -- β-rule (⊥): hcomp A ⊥ u u₀  ≡  u₀
+           then eval base
+           -- Otherwise leave it in weak-head-normal form
+           else THComp (eval aTy) phi' (eval tube) (eval base)
+    -- All remaining constructors are already in normal form
+    _ -> t
 
 --------------------------------------------------------------------------------
 -- 4. Interval Algebra
@@ -370,6 +413,36 @@ infer _   (TCube _)     = Right intervalTy
 infer _   t@(TAbs _ _) = Left (CannotInfer t)
 infer _   t@(PLam _ _) = Left (CannotInfer t)
 
+-- ─── Kan Composition ─────────────────────────────────────────────────────────
+-- Γ ⊢ A : U_n    Γ ⊢ φ : 𝕀    Γ, i:𝕀 ⊢ u_body : A    Γ ⊢ u₀ : A
+-- ──────────────────────────────────────────────────────────────────────────────
+--               Γ ⊢ hcomp A φ (⟨i⟩ u_body) u₀ ⇒ A
+--
+-- Note: The boundary coherence condition  φ ⊢ u₀ ≡ u@0  is recorded here but
+-- not enforced algorithmically, as it requires a "restriction" judgement that
+-- lies outside this minimal checker's scope.
+infer ctx (THComp aTy phi tube base) = do
+    _n     <- requireUniverse ctx aTy
+    let aTy' = eval aTy
+    -- φ must be an interval expression (lives outside the universe hierarchy)
+    checkInterval ctx phi
+    -- The base cap must inhabit A
+    check ctx base aTy'
+    -- The tube must be a path abstraction whose body inhabits A
+    case eval tube of
+        PLam i body ->
+            -- Extend context with a fresh interval variable for the tube
+            check (extendCtx i intervalTy ctx) body aTy'
+        tube' -> do
+            -- If the tube is not a PLam (e.g. a stuck variable), infer its type
+            -- and require it to be a Path in A
+            tubeTy <- infer ctx tube'
+            case eval tubeTy of
+                TPath a _ _
+                    | definitionallyEqual a aTy' -> return ()
+                other -> Left (ExpectedPath other)
+    return aTy'
+
 -- ---------------------------------------------------------------------------
 -- 6e. Type Checking  (Γ ⊢ t ⇐ T)
 -- ---------------------------------------------------------------------------
@@ -572,10 +645,100 @@ demoTypeCheck = do
         Left err -> putStrLn $ "  ✗  " ++ show err
 
 --------------------------------------------------------------------------------
--- 7. Main
+-- 8. Kan Composition Demo
+--------------------------------------------------------------------------------
+
+demoKan :: IO ()
+demoKan = do
+    putStrLn "\n=== Kan Composition (hcomp) ==="
+
+    -- ── β-rule ⊤: hcomp A ⊤ (⟨i⟩ t) u₀  ≡  t[i:=1] ─────────────────────────
+    putStrLn "\n── β-rule (⊤): hcomp A ⊤ (⟨i⟩ t) u₀  ≡  t ────────────────────"
+    let hTop = THComp (TVar "A")
+                      (TInterval I1)
+                      (PLam "i" (TVar "t"))
+                      (TVar "u0")
+    putStrLn $ "  Before: " ++ show hTop
+    putStrLn $ "  After:  " ++ show (eval hTop)
+
+    -- ── β-rule ⊥: hcomp A ⊥ u u₀  ≡  u₀ ─────────────────────────────────────
+    putStrLn "\n── β-rule (⊥): hcomp A ⊥ (⟨i⟩ t) u₀  ≡  u₀ ──────────────────"
+    let hBot = THComp (TVar "A")
+                      (TInterval I0)
+                      (PLam "i" (TVar "t"))
+                      (TVar "u0")
+    putStrLn $ "  Before: " ++ show hBot
+    putStrLn $ "  After:  " ++ show (eval hBot)
+
+    -- ── Degenerate fill: ⟨i⟩ hcomp A i (⟨j⟩ x) x  :  Path A x x ─────────────
+    --
+    --   This is the canonical "degenerate" Kan fill.  Think of it as a 1-cube
+    --   whose φ-face slides from ⊥ (i=0) to ⊤ (i=1):
+    --
+    --      i=0:  hcomp A ⊥ (⟨j⟩ x) x  ≡  x    (β-rule ⊥)
+    --      i=1:  hcomp A ⊤ (⟨j⟩ x) x  ≡  x    (β-rule ⊤)
+    --
+    --   Both endpoints are x, so the whole path has type  Path A x x.
+    --   We type-check it in the open context {A : U0, x : A}.
+    putStrLn "\n── Degenerate fill: ⟨i⟩ hcomp A i (⟨j⟩ x) x  :  Path A x x ──"
+    let degFill  = PLam "i"
+                     (THComp (TVar "A")
+                             (TVar "i")
+                             (PLam "j" (TVar "x"))
+                             (TVar "x"))
+    let degFillTy = TPath (TVar "A") (TVar "x") (TVar "x")
+    let ctxAx    = [("x", TVar "A"), ("A", TUniv 0)]
+    putStrLn $ "  Term: " ++ show degFill
+    case check ctxAx degFill degFillTy of
+        Right () -> putStrLn $
+            "  ✓  ⟨i⟩ hcomp A i (⟨j⟩ x) x  :  Path A x x   (in context A:U0, x:A)"
+        Left err -> putStrLn $ "  ✗  " ++ show err
+
+    -- ── Path transitivity term via hcomp ──────────────────────────────────────
+    --
+    --   trans : Π(A:U0). Π(x y z:A). Path A x y → Path A y z → Path A x z
+    --   trans = λA x y z p q. ⟨i⟩ hcomp A i (⟨j⟩ q@j) (p@i)
+    --
+    --   Intuition (think of a square with i going right, j going up):
+    --
+    --         x ─── p ──→ y
+    --         |           |
+    --    q@j  |  hcomp    | q@j
+    --         |           |
+    --         x ─── p ──→ z   ← the filled top edge is trans p q
+    --
+    --   At i=0: φ=⊥, so hcomp reduces to the base  p@0 = x  ✓
+    --   At i=1: φ=⊤, so hcomp reduces to the tube  q@1 = z  ✓
+    --
+    --   (Full boundary-coherence verification requires η-expansion of paths and
+    --    a restriction judgement; those are beyond this minimal checker.)
+    putStrLn "\n── Path Transitivity (trans) via hcomp ─────────────────────────"
+    let transTy =
+          TPi "A" (TUniv 0) $
+          TPi "x" (TVar "A") $
+          TPi "y" (TVar "A") $
+          TPi "z" (TVar "A") $
+          TPi "p" (TPath (TVar "A") (TVar "x") (TVar "y")) $
+          TPi "q" (TPath (TVar "A") (TVar "y") (TVar "z")) $
+          TPath (TVar "A") (TVar "x") (TVar "z")
+    let transTm =
+          TAbs "A" $ TAbs "x" $ TAbs "y" $ TAbs "z" $
+          TAbs "p" $ TAbs "q" $
+          PLam "i"
+            (THComp
+               (TVar "A")
+               (TVar "i")                              -- φ = i  (grows from ⊥ to ⊤)
+               (PLam "j" (PApp (TVar "q") (TVar "j"))) -- tube: ⟨j⟩ q@j
+               (PApp (TVar "p") (TVar "i")))           -- base: p@i
+    putStrLn $ "  trans = " ++ show transTm
+    putStrLn $ "  trans : " ++ show transTy
+
+--------------------------------------------------------------------------------
+-- 9. Main
 --------------------------------------------------------------------------------
 
 main :: IO ()
 main = do
     demoEval
     demoTypeCheck
+    demoKan
