@@ -603,7 +603,7 @@ check ctx t ty = do
     ty' <- infer ctx t
     requireEqual (eval ty) (eval ty')
 -- ---------------------------------------------------------------------------
--- 6f. Top-level helpers
+-- Top-level helpers
 -- ---------------------------------------------------------------------------
 
 -- | Infer the type of a closed term (empty context).
