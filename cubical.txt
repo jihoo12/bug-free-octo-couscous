@@ -46,3 +46,5 @@ Path U2 (Path U1 U0 U0) (Path U1 U0 U0)
 
 -- Dependent: A:U1, so Path U1 A A is well-typed
 Π(A:U1). Π(B:U1). Path U1 A A
+
+-- it works
