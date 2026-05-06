@@ -727,6 +727,7 @@ main = do
 
 -- demo has bug or main code has error?
 -- that is the question
+-- gemini says demo has bug 🥳 and main code doesn't have error
 
 --------------------------------------------------------------------------------
 -- Eval Demo
