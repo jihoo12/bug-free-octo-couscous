@@ -811,7 +811,7 @@ demoTypeCheck = do
                      (TPi "x" (TVar 0)
                           (TPath (TVar 1) (TVar 0) (TVar 0)))
     let reflTm = TAbs "A" (TAbs "x" (PLam "i" (TVar 1)))
-    reportCheck "refl" reflTm reflTy
+    reportCheck "refl" reflTm reflTy 
 
     -- ── 4. Function composition ──────────────────────────────────────────────
     --   comp : Π(A B C : U0). (A → B) → (B → C) → A → C
