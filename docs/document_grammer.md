@@ -538,5 +538,4 @@ hcomp U1 [i0] (⟨i⟩ Path U1 U0 U0) U0
 
 ---
 
-*That covers everything the parser accepts. When in doubt, add parentheses —
-they never hurt and the inner term always gets the full grammar.*
+*When in doubt, add parentheses — they never hurt and the inner term always gets the full grammar.*
