@@ -6,11 +6,10 @@ module Parser
     , ParseError
     ) where
 
-import CubicalLambda
+import Cubical.CubicalLambda
 
 import Data.Char  (isAlphaNum, isAlpha, isDigit, isSpace)
 import Data.List  (stripPrefix)
-import Control.Monad (void)
 
 --------------------------------------------------------------------------------
 -- Types
