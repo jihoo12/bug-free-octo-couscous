@@ -1,2 +1,2 @@
 # octo
-docs
+document seems wrong
