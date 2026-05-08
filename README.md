@@ -1,3 +1,11 @@
 # octo
-i think need fix parser
-parser would parsing word not unicode character need fix
+changed
+```text
+Π -> PI
+λ -> lambda_
+¬ -> not
+∧ -> and
+∨ -> or
+⟨ -> {
+⟩ -> }
+```

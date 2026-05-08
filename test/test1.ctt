@@ -1,5 +1,5 @@
 -- 1. Define the equivalence (Identity on U0)
-def idEquiv : Equiv U0 U0 = mkEquiv U0 U0 (λx. x) (λx. x) (λa. ⟨i⟩ a) (λb. (⟨i⟩ b))
+def idEquiv : Equiv U0 U0 = mkEquiv U0 U0 (lambda_x. x) (lambda_x. x) (lambda_a. {i} a) (lambda_b. ({i} b))
 
 -- 2. Turn it into a path
 def uaPath : Path U1 U0 U0 = ua idEquiv

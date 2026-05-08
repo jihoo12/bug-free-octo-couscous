@@ -98,7 +98,7 @@ brackets :: Parser a -> Parser a
 brackets p = symbol "[" *> p <* symbol "]"
 
 angles :: Parser a -> Parser a
-angles p = symbol "\10216" *> p <* symbol "\10217"
+angles p = symbol "{" *> p <* symbol "}"
 
 --------------------------------------------------------------------------------
 -- Interval expression parser
@@ -120,7 +120,7 @@ iJoin = do
     go l
   where
     go acc = do
-        mv <- try (symbol "\8744")
+        mv <- try (symbol "or")
         case mv of
             Nothing -> return acc
             Just () -> iMeet >>= \r -> go (Join acc r)
@@ -131,13 +131,13 @@ iMeet = do
     go l
   where
     go acc = do
-        mv <- try (symbol "\8743")
+        mv <- try (symbol "and")
         case mv of
             Nothing -> return acc
             Just () -> iNeg >>= \r -> go (Meet acc r)
 
 iNeg :: Parser I
-iNeg = (symbol "\172" *> fmap Neg iNeg)
+iNeg = (symbol "not" *> fmap Neg iNeg)
     <|> iAtom
 
 iAtom :: Parser I
@@ -150,7 +150,7 @@ iAtom = (symbol "0" *> return I0)
         case s of
             ('i':rest) -> case span isDigit rest of
                 (ds@(_:_), remaining) -> Right (IVar (read ds), remaining)
-                _                     -> Left "expected i<n>"
+                _                     -> Left "expected i{n}"
             _ -> Left "expected interval variable"
 
 --------------------------------------------------------------------------------
@@ -174,7 +174,7 @@ twG g env = lamG g env <|> plamG g env <|> piG g env <|> appG g env
 
 lamG :: GlobalEnv -> Env -> Parser Term
 lamG g env = do
-    symbol "\955"
+    symbol "lambda_"
     x    <- name
     symbol "."
     body <- twG g (x : env)
@@ -188,7 +188,7 @@ plamG g env = do
 
 piG :: GlobalEnv -> Env -> Parser Term
 piG g env = do
-    symbol "\928"
+    symbol "PI"
     symbol "("
     x   <- name
     symbol ":"
