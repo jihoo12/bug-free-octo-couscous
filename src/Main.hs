@@ -1,4 +1,4 @@
-import CubicalLambda
+import Cubical.CubicalLambda
 import Parser
 
 import System.Environment (getArgs)
@@ -83,7 +83,7 @@ processFile path = do
 usage :: String
 usage = unlines
     [ "Usage:"
-    , "  cubical <file> ...       process statements in each file"
+    , "  octo <file> ...       process statements in each file"
     , ""
     , "File format:"
     , "  def x : T = e           define x with explicit type T"
