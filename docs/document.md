@@ -36,8 +36,8 @@ well-formed term without hitting a parse error.
 | Interval pseudo-type | `𝕀` |
 | Interval endpoint | `0` or `1` |
 | Interval variable | `i0` `i1` `i2` … |
-| Lambda | `λx. body` |
-| Dependent product | `Π(x:A). B` |
+| Lambda | `lambda_x. body` |
+| Dependent product | `PI(x:A). B` |
 | Path type | `Path A u v` |
 | Path abstraction | `⟨i⟩ body` |
 | Path application | `t @ r` |

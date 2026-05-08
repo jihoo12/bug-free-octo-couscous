@@ -30,13 +30,13 @@ def Type0Alias = Type0
 
 -- Identity function: takes a value of type U0, returns it
 -- (U0 here is the type, so arguments must be elements of U0, e.g. 𝕀)
-def id : Π(x:U0). U0 = λx. x
+def id : PI(x:U0). U0 = lambda_x. x
 
 -- Const function
-def const : Π(x:U0). Π(y:U0). U0 = λx. λy. x
+def const : PI(x:U0). PI(y:U0). U0 = lambda_x. lambda_y. x
 
 -- Function composition type (bare term — just infer)
-Π(A:U0). Π(B:U0). Π(C:U0). Π(f:Π(x:B).C). Π(g:Π(x:A).B). Π(x:A). C
+PI(A:U0). PI(B:U0). PI(C:U0). PI(f:PI(x:B).C). PI(g:PI(x:A).B). PI(x:A). C
 
 -- Apply id to an element that lives in U0: 𝕀 : U0, so id 𝕀 : U0
 -- (U1 is NOT a valid argument since U1 : U2, not U0)
@@ -90,7 +90,7 @@ hcomp U1 [i0] {i} U0 U0
 def SelfEquiv = Equiv U0 U0
 
 -- The identity equivalence on U0
-def idEquiv : Equiv U0 U0 = mkEquiv U0 U0 (λx. x) (λx. x) (λa. {i} a) (λb. {i} b)
+def idEquiv : Equiv U0 U0 = mkEquiv U0 U0 (lambda_x. x) (lambda_x. x) (lambda_a. {i} a) (lambda_b. {i} b)
 
 -- Bare infer: should give Equiv U0 U0
 idEquiv
@@ -162,10 +162,10 @@ check contextWorks : U0 = myVal
 -- ------------------------------------------------------------
 
 def myType = U0
-Π(x:myType). myType
+PI(x:myType). myType
 
 -- Pi whose domain is a defined Equiv type
-Π(e:SelfEquiv). Path U1 U0 U0
+PI(e:SelfEquiv). Path U1 U0 U0
 
 
 -- ------------------------------------------------------------
@@ -179,7 +179,7 @@ def myType = U0
 -- check shouldFail : U1 = U0
 
 -- Missing ε in mkEquiv:
--- mkEquiv U0 U0 (λx. x) (λx. x) (λa. {i} a)
+-- mkEquiv U0 U0 (lambda_x. x) (lambda_x. x) (lambda_a. {i} a)
 
 -- Lambda without annotation (CannotInfer):
--- def badDef = λx. x
+-- def badDef = lambda_x. x
