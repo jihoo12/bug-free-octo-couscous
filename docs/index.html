@@ -9,6 +9,12 @@
 </head>
 <body>
 
+<button id="theme-toggle" aria-label="Toggle light/dark theme">
+  <div class="toggle-track"><div class="toggle-thumb"></div></div>
+  <span class="toggle-emoji" id="toggle-emoji">☀️</span>
+  <span class="toggle-label" id="toggle-label">Light</span>
+</button>
+
 <nav id="sidebar">
   <div class="nav-logo">
     <h2>Cubical Lambda</h2>
@@ -535,22 +541,6 @@ i0foo   <span class="comment">-- looked up as a name — make sure it's in scope
 
 </main>
 
-<script>
-  // Highlight active nav link on scroll
-  const sections = document.querySelectorAll('section[id]');
-  const navLinks = document.querySelectorAll('nav#sidebar a');
-
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        navLinks.forEach(a => a.classList.remove('active'));
-        const active = document.querySelector(`nav#sidebar a[href="#${entry.target.id}"]`);
-        if (active) active.classList.add('active');
-      }
-    });
-  }, { rootMargin: '-20% 0px -70% 0px' });
-
-  sections.forEach(s => observer.observe(s));
-</script>
+<script src="script.js"></script>
 </body>
 </html>
