@@ -35,6 +35,10 @@ data Term
     | TGlue Term Term Term
     | TGlueElem Term Term Term
     | TUnglue Term Term Term
+    | TSigma Name Term Term
+    | TPair Term Term
+    | TFst Term
+    | TSnd Term
     deriving (Eq)
 
 showTerm :: [Name] -> Term -> String
@@ -79,6 +83,14 @@ showTerm env t = case t of
         "unglue [" ++ showTerm env phi ++ "] "
         ++ "(" ++ showTerm env te ++ ") "
         ++ showTerm env g
+    TSigma x a b ->
+        "Σ(" ++ x ++ ":" ++ showTerm env a ++ "). " ++ showTerm (x:env) b
+    TPair a b ->
+        "(" ++ showTerm env a ++ " , " ++ showTerm env b ++ ")"
+    TFst p ->
+        "fst " ++ showTerm env p
+    TSnd p ->
+        "snd " ++ showTerm env p
 
 instance Show Term where
     show = showTerm []
@@ -119,6 +131,14 @@ shift d c term = case term of
         TGlueElem (shift d c phi) (shift d c t) (shift d c a)
     TUnglue phi te g ->
         TUnglue (shift d c phi) (shift d c te) (shift d c g)
+    TSigma x a b ->
+        TSigma x (shift d c a) (shift d (c+1) b)
+    TPair a b ->
+        TPair (shift d c a) (shift d c b)
+    TFst p ->
+        TFst (shift d c p)
+    TSnd p ->
+        TSnd (shift d c p)
 
 subst :: Int -> Term -> Term -> Term
 subst j s term = case term of
@@ -154,6 +174,14 @@ subst j s term = case term of
         TGlueElem (subst j s phi) (subst j s t) (subst j s a)
     TUnglue phi te g ->
         TUnglue (subst j s phi) (subst j s te) (subst j s g)
+    TSigma x a b ->
+        TSigma x (subst j s a) (subst (j+1) (shift 1 0 s) b)
+    TPair a b ->
+        TPair (subst j s a) (subst j s b)
+    TFst p ->
+        TFst (subst j s p)
+    TSnd p ->
+        TSnd (subst j s p)
 
 beta :: Term -> Term -> Term
 beta body arg = shift (-1) 0 (subst 0 (shift 1 0 arg) body)

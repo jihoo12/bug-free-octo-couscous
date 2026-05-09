@@ -32,6 +32,7 @@ data TypeError
     | ExpectedPath Term
     | ExpectedUniverse Term
     | ExpectedEquiv Term
+    | ExpectedSigma Term
     | NotAnInterval Term
     | CannotInfer Term
     | EtaFuelExhausted Term Term
@@ -52,6 +53,8 @@ instance Show TypeError where
             "  Expected a universe U_n, but found:\n    " ++ show ty
         ExpectedEquiv ty ->
             "  Expected an Equiv type, but found:\n    " ++ show ty
+        ExpectedSigma ty ->
+            "  Expected a Σ-type, but found:\n    " ++ show ty
         NotAnInterval t ->
             "  Expected an interval expression (𝕀), but got:\n    " ++ show t
         CannotInfer t ->
@@ -176,6 +179,10 @@ applyLiteral lit = go
         TGlue a ph te  -> eval $ TGlue (go a) (go ph) (go te)
         TGlueElem ph x a -> eval $ TGlueElem (go ph) (go x) (go a)
         TUnglue ph te g  -> eval $ TUnglue (go ph) (go te) (go g)
+        TSigma x a b   -> TSigma x (go a) (go b)
+        TPair a b      -> TPair (go a) (go b)
+        TFst p         -> eval $ TFst (go p)
+        TSnd p         -> eval $ TSnd (go p)
         _              -> t   -- TVar, TUniv, TIntervalTy: no interval vars
 
 -- | Check that @tubeAt0 ≡ base@ holds on every face of @phi@.
@@ -353,6 +360,29 @@ infer ctx t@(TGlueElem phi elm a) =
        else if isBotDNF phi' then infer ctx a
        else Left (CannotInfer t)
 
+-- Σ-type formation: Σ(x:A).B  :  U(max i j)
+infer ctx (TSigma x aTy bTy) = do
+    i <- requireUniverse ctx aTy
+    j <- requireUniverse (extendCtx x (eval aTy) ctx) bTy
+    return $ TUniv (max i j)
+
+-- First projection: fst p  :  A    when  p : Σ(x:A).B
+infer ctx (TFst p) = do
+    pTy <- infer ctx p
+    case eval pTy of
+        TSigma _ aTy _ -> return (eval aTy)
+        other          -> Left (ExpectedSigma other)
+
+-- Second projection: snd p  :  B[fst p / x]    when  p : Σ(x:A).B
+infer ctx (TSnd p) = do
+    pTy <- infer ctx p
+    case eval pTy of
+        TSigma _ _ bTy -> return (eval (beta bTy (TFst p)))
+        other          -> Left (ExpectedSigma other)
+
+-- Pairs cannot be inferred without a type annotation
+infer _ t@(TPair _ _) = Left (CannotInfer t)
+
 infer ctx (THComp aTy phi tube base) = do
     _ <- requireUniverse ctx aTy
     let aTy' = eval aTy
@@ -435,6 +465,15 @@ check ctx (TGlueElem phi t a) ty =
             check ctx t tTy
             check ctx a (eval aTy)
         other -> Left (Other $ "glue: expected Glue type, got: " ++ show other)
+
+-- Pair introduction: check (a , b) against Σ(x:A).B
+-- Check a : A, then b : B[a/x].
+check ctx (TPair a b) ty =
+    case eval ty of
+        TSigma _ aTy bTy -> do
+            check ctx a (eval aTy)
+            check ctx b (eval (beta bTy a))
+        other -> Left (ExpectedSigma other)
 
 check ctx t ty = do
     ty' <- infer ctx t

@@ -44,6 +44,10 @@ termSize t = case t of
     TGlue a ph te        -> 1 + termSize a + termSize ph + termSize te
     TGlueElem ph x a     -> 1 + termSize ph + termSize x + termSize a
     TUnglue ph te g      -> 1 + termSize ph + termSize te + termSize g
+    TSigma _ a b         -> 1 + termSize a + termSize b
+    TPair a b            -> 1 + termSize a + termSize b
+    TFst p               -> 1 + termSize p
+    TSnd p               -> 1 + termSize p
 
 -- | Starting fuel for an eta-equality check between two already-evaluated
 -- terms.  We use the combined term size as the base, with a minimum floor of
@@ -215,5 +219,39 @@ etaEq fuel ctx t1 t2
     = etaEq fuel ctx ty1 ty2
       `andResult` etaEq fuel ctx u1 u2
       `andResult` etaEq fuel ctx v1 v2
+    | TSigma _ a1 b1 <- t1, TSigma _ a2 b2 <- t2
+    = etaEq fuel ctx a1 a2 `andResult` etaEq fuel ctx b1 b2
+
+    -- Pair congruence (structural: no fuel consumed)
+    -- Both sides are already pairs: compare components directly.
+    | TPair a1 b1 <- t1, TPair a2 b2 <- t2
+    = etaEq fuel ctx a1 a2 `andResult` etaEq fuel ctx b1 b2
+
+    -- Sigma eta (eta-expansion step: consumes fuel)
+    --
+    -- When exactly one side is a pair constructor and the other is a neutral
+    -- term, eta-expand the neutral: for any  n : Σ(x:A).B  we have
+    --   n  ≡  (fst n , snd n)
+    -- so we reduce the comparison to checking the two projections.
+    --
+    -- The two-pair congruence guard above fires first when *both* sides are
+    -- TPair, so these guards only trigger when the other side is neutral.
+    --
+    -- No loop risk: TFst/TSnd applied to a neutral is itself neutral (not a
+    -- TPair), so the recursive calls on the projection side cannot re-trigger
+    -- the eta guard; fuel decrements protect the pair side if it is itself
+    -- a nested TPair.
+    | TPair a1 b1 <- t1
+    = etaEq (fuel-1) ctx a1 (eval (TFst t2))
+      `andResult` etaEq (fuel-1) ctx b1 (eval (TSnd t2))
+    | TPair a2 b2 <- t2
+    = etaEq (fuel-1) ctx (eval (TFst t1)) a2
+      `andResult` etaEq (fuel-1) ctx (eval (TSnd t1)) b2
+
+    -- Projection congruence on neutral spines (structural: no fuel consumed)
+    | TFst p1 <- t1, TFst p2 <- t2
+    = etaEq fuel ctx p1 p2
+    | TSnd p1 <- t1, TSnd p2 <- t2
+    = etaEq fuel ctx p1 p2
 
     | otherwise = NotEqual

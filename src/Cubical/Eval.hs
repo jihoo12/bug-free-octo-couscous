@@ -132,6 +132,47 @@ eval t = case t of
                                eval (TTransport aFamS
                                        (PApp (shift 1 0 x') (TVar 0)))
 
+                       -- Sigma transport:
+                       --   p i = Σ(x : A i). B i x
+                       --   transport p (a , b) =
+                       --     let a' = transport (⟨i⟩ A i)           a
+                       --         b' = transport (⟨i⟩ B i (fill A a i)) b
+                       --     in  (a' , b')
+                       --
+                       --   fill (⟨i⟩ A i) a i  =  transport (⟨j⟩ A (i ∧ j)) a
+                       --   This is the canonical fill defined via hcomp/transport.
+                       (TSigma _ _ _, TSigma _ _ _) ->
+                           case x' of
+                             TPair a b ->
+                               -- A-family: ⟨i⟩ A i  (project first component of body)
+                               let aFam = PLam iName $
+                                       case eval (beta (shift 1 0 body) (TVar 0)) of
+                                           TSigma _ aI _ -> aI
+                                           _             -> shift 1 0 b0A
+                                   -- transport along A
+                                   a' = eval (TTransport aFam a)
+                                   -- B-family along fill: ⟨i⟩ B i (fill A a i)
+                                   bFam = PLam iName $
+                                       case eval (beta (shift 1 0 body) (TVar 0)) of
+                                           TSigma _ _ bI ->
+                                               -- bI : B i, binder i = TVar 0
+                                               -- apply to (fill A a i):
+                                               -- fill at i=TVar 0: transport (⟨j⟩ A (0∧j)) a
+                                               let fillAtI = eval (TTransport
+                                                       (PLam "j" $
+                                                           eval (PApp (shift 2 0 aFam)
+                                                               (TInterval (Meet (IVar 1) (IVar 0)))))
+                                                       (shift 1 0 a))
+                                               in eval (beta bI fillAtI)
+                                           _ -> shift 1 0 b0B
+                                   b' = eval (TTransport bFam b)
+                               in TPair a' b'
+                             -- non-pair: stuck
+                             _ -> TTransport p' x'
+                           where
+                             b0A = case b0 of TSigma _ a _ -> a; _ -> b0
+                             b0B = case b0 of TSigma _ _ bz -> bz; _ -> b0
+
                        -- Glue degenerate cases:
                        --   phi = 0  →  Glue A [0] te  =  A,  transport as usual
                        --   phi = 1  →  Glue A [1] te  =  dom(te),  transport via equiv
@@ -181,6 +222,22 @@ eval t = case t of
            else if isBotDNF phi'
            then eval g
            else TUnglue phi' (eval te) (eval g)
+
+    TSigma x a b -> TSigma x (eval a) (eval b)
+
+    TPair a b -> TPair (eval a) (eval b)
+
+    -- fst (a , b)  →  a
+    TFst p ->
+        case eval p of
+            TPair a _ -> a
+            p'        -> TFst p'
+
+    -- snd (a , b)  →  b
+    TSnd p ->
+        case eval p of
+            TPair _ b -> b
+            p'        -> TSnd p'
 
     _ -> t
 
