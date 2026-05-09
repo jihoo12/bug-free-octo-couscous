@@ -20,7 +20,8 @@ well-formed term without hitting a parse error.
 10. [The parenthesisation rule](#10-the-parenthesisation-rule)
 11. [Cubical constructs in detail](#11-cubical-constructs-in-detail)
 12. [Equivalences and univalence](#12-equivalences-and-univalence)
-13. [Common mistakes and how to fix them](#13-common-mistakes)
+13. [Sigma types and pairs](#13-sigma-types-and-pairs)
+14. [Common mistakes and how to fix them](#14-common-mistakes)
 
 ---
 
@@ -50,16 +51,22 @@ well-formed term without hitting a parse error.
 | Apply forward map | `equivFwd e x` |
 | Univalence map | `ua e` |
 | Transport along a path | `transport p x` |
+| Dependent sum type | `SIGMA(x:A). B` |
+| Pair constructor | `pair t u` |
+| First projection | `fst p` |
+| Second projection | `snd p` |
 | Parenthesise anything | `( … )` |
 
 ---
 
 ## 2. File format and statements
 
-The CLI reads your source file line by line. Each non-blank, non-comment line is
-one **statement**. Statements can define names, check terms, or infer the type of
-a bare term. Crucially, definitions **persist** — every line sees the names
-defined on all previous lines.
+The CLI reads your source file and groups it into **statements** separated by
+blank lines. A statement may therefore span multiple physical lines — anything
+between two blank lines (or between a blank line and the start/end of the file)
+is treated as a single statement. Comment-only lines (lines whose first
+non-whitespace content is `--`) are skipped without counting as separators, so
+they may appear anywhere inside a multi-line statement without splitting it.
 
 ### Statement kinds
 
@@ -100,6 +107,25 @@ and printed. Nothing is added to the environment.
 ```
 U0                          -- infers U1
 PI(A:U0). PI(x:A). A         -- infers U1
+```
+
+### Multi-line statements
+
+A statement may span multiple physical lines. Blank lines act as statement
+separators; comment-only lines (starting with `--`) are stripped and do not
+count as separators. Everything between two blank lines is joined with spaces
+and treated as one statement.
+
+```
+-- This entire block is ONE statement:
+def longDef
+    : SIGMA(x:U0). U0
+    = pair U0 U0
+
+-- Comment lines inside a block are fine:
+def anotherDef
+    -- this comment is ignored but does not split the statement
+    : U0 = U0
 ```
 
 ### Comments and blank lines
@@ -163,6 +189,7 @@ The following words are **reserved** and cannot be used as variable names:
 ```
 def   check
 Path   hcomp   Glue   glue   unglue   Equiv   mkEquiv   equivFwd   ua   transport
+SIGMA   pair   fst   snd
 ```
 
 A keyword is only recognised when it is **not immediately followed** by a letter,
@@ -255,6 +282,7 @@ term  ::=  lambda_x. term                      -- lambda abstraction
         |  function x. term                    -- lambda abstraction (alternate)
         |  {x} term                            -- path abstraction
         |  PI(x : term). term                  -- dependent product
+        |  SIGMA(x : term). term               -- dependent sum
         |  app                                 -- application spine
 
 app   ::=  atom ( @ atom                    -- path application  (left-assoc)
@@ -274,6 +302,9 @@ atom  ::=  U<n>                             -- universe
         |  equivFwd te atom                 -- apply forward map
         |  ua te                            -- univalence map
         |  transport te atom                -- transport along a path
+        |  pair te te                       -- pair constructor
+        |  fst te                           -- first projection
+        |  snd te                           -- second projection
         |  <name>                           -- variable (local or global)
         |  ( term )                         -- parenthesised term
 ```
@@ -344,6 +375,24 @@ PI(e:Equiv U0 U0). Path U1 U0 U0                   -- Pi whose domain is an Equi
 ```
 {i} U0              -- constant path on U0; used as the tube argument in hcomp
 ```
+
+### Dependent sum — `SIGMA(x:A). B`
+
+```
+SIGMA(x : A). B
+```
+
+- `SIGMA` (upper-case) followed by a binder in parentheses `(x : A)`, then `.`, then the
+  fibre type `B`.
+- Mirrors the syntax of `PI` exactly, but constructs a Σ-type instead of a Π-type.
+- The domain `A` and fibre `B` are full terms.
+
+```
+SIGMA(x:U0). U0                  -- non-dependent product (A × B)
+SIGMA(n:U0). PI(x:n). n          -- dependent sum
+```
+
+**Typing rule:** If `A : U_n` and `B : U_m` (under `x : A`) then `SIGMA(x:A). B : U_(max n m)`.
 
 ---
 
@@ -713,7 +762,12 @@ transport ({i} U0) x   -- transport along a constant path — reduces to x
 | Condition | Reduction |
 |---|---|
 | `p = ua e` | `transport (ua e) x  ≡  equivFwd e x` &nbsp;&nbsp; **(uaβ — the key univalence computation)** |
-| `p = {i} A` and body is constant | `transport ({i} A) x  ≡  x` |
+| `p = {i} A` and `A[0] ≡ A[1]` (constant body) | `transport ({i} A) x  ≡  x` |
+| `p = {i} PI(a:A(i)).B(i,a)` | transport produces a lambda; see Pi transport below |
+| `p = {i} Path (A i) (u i) (v i)` | transport produces a path abstraction |
+| `p = {i} SIGMA(x:A(i)).B(i,x)` and `x = pair a b` | transport component-wise; see Section 13 |
+| `p = {i} Glue A(i) [0] te(i)` | reduces to transport along the base type family |
+| `p = {i} Glue A(i) [1] te(i)` | reduces to transport along the domain type family |
 
 The uaβ rule is the computational heart of univalence: transporting along a
 `ua` path *computes* by applying the forward map of the equivalence.
@@ -759,7 +813,105 @@ transport (ua (mkEquiv U0 U0 (lambda_x. x) (lambda_x. x) (lambda_a. {i} a) (lamb
 
 ---
 
-## 13. Common mistakes
+## 13. Sigma types and pairs
+
+This section covers the dependent sum type `SIGMA(x:A).B` and its introduction
+and elimination forms.
+
+### `SIGMA(x:A). B` — dependent sum type
+
+```
+SIGMA(x : A). B
+```
+
+Both arguments are full terms. The type `SIGMA(x:A).B` is the type of pairs
+`(a, b)` where `a : A` and `b : B[a/x]`.
+
+```
+SIGMA(x:U0). U0            -- non-dependent product U0 × U0
+SIGMA(A:U0). PI(x:A). A    -- the type of identity-function evidence
+```
+
+**Typing rule:** If `A : U_n` and `B : U_m` (under `x : A`) then
+`SIGMA(x:A).B : U_(max n m)`.
+
+### `pair t u` — pair constructor
+
+```
+pair  <first>  <second>
+```
+
+Introduces an element of a Σ-type. Both arguments are `( term )` or atom.
+
+```
+pair U0 U0               -- has type SIGMA(x:U0). U0  (when checked against one)
+pair (lambda_x. x) U0   -- compound first element needs parens
+```
+
+**Important:** `pair` cannot be *inferred* — the type checker needs a known
+`SIGMA` type to check against. Always supply the type in a `def` annotation or
+embed the pair in a checked position.
+
+```
+-- ❌ Cannot infer type of a bare pair
+pair U0 U0
+
+-- ✅ Type given explicitly via def annotation
+def myPair : SIGMA(x:U0). U0 = pair U0 U0
+
+-- ✅ Type given via check
+check myPair : SIGMA(x:U0). U0 = pair U0 U0
+```
+
+**Typing rule:** `pair a b : SIGMA(x:A).B` when `a : A` and `b : B[a/x]`.
+
+### `fst p` — first projection
+
+```
+fst  <pair>
+```
+
+Extracts the first component of a pair `p : SIGMA(x:A).B`, producing a result
+of type `A`. The argument is a `( term )` or atom.
+
+```
+fst (pair U0 U0)     -- reduces to U0
+```
+
+**β-rule:** `fst (pair a b)  ≡  a`
+
+### `snd p` — second projection
+
+```
+snd  <pair>
+```
+
+Extracts the second component of a pair `p : SIGMA(x:A).B`, producing a result
+of type `B[fst p / x]`. The argument is a `( term )` or atom.
+
+```
+snd (pair U0 U0)     -- reduces to U0
+```
+
+**β-rule:** `snd (pair a b)  ≡  b`
+
+### Transport for Σ-types
+
+`transport` is aware of Σ-types. Given a path `p : Path U (SIGMA(x:A0).B0) (SIGMA(x:A1).B1)`
+and a pair `x = pair a b`, `transport p x` computes component-wise:
+
+```
+transport p (pair a b)
+  ≡  pair (transport (⟨i⟩ A i) a)
+          (transport (⟨i⟩ B i (fill A a i)) b)
+```
+
+where `fill A a i` is the canonical fill `transport (⟨j⟩ A (i∧j)) a`. If `x`
+is not a literal pair, transport is stuck.
+
+---
+
+## 14. Common mistakes
 
 ### Using a name before it is defined
 
@@ -899,7 +1051,20 @@ hcomp U1 [i0] {i} U0 U0
 hcomp U1 [i0] ({i} Path U1 U0 U0) U0
 ```
 
-### Forgetting that mkEquiv needs six arguments
+### Using `pair` without a known Σ-type
+
+`pair t u` cannot have its type inferred — you must check it against a known
+`SIGMA` type.
+
+```
+-- ❌ Wrong — cannot infer the type of a bare pair
+pair U0 U0
+
+-- ✅ Correct — annotate the def
+def myPair : SIGMA(x:U0). U0 = pair U0 U0
+```
+
+### Forgetting that `mkEquiv` needs six arguments
 
 `mkEquiv` takes `A B f g η ε` — six arguments total. A common mistake is to
 omit one of the homotopies or to confuse the order. The checker will report a
