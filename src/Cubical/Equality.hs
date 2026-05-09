@@ -44,6 +44,10 @@ termSize t = case t of
     TGlue a ph te        -> 1 + termSize a + termSize ph + termSize te
     TGlueElem ph x a     -> 1 + termSize ph + termSize x + termSize a
     TUnglue ph te g      -> 1 + termSize ph + termSize te + termSize g
+    TSigma _ a b         -> 1 + termSize a + termSize b
+    TPair a b            -> 1 + termSize a + termSize b
+    TFst p               -> 1 + termSize p
+    TSnd p               -> 1 + termSize p
 
 -- | Starting fuel for an eta-equality check between two already-evaluated
 -- terms.  We use the combined term size as the base, with a minimum floor of
@@ -215,5 +219,17 @@ etaEq fuel ctx t1 t2
     = etaEq fuel ctx ty1 ty2
       `andResult` etaEq fuel ctx u1 u2
       `andResult` etaEq fuel ctx v1 v2
+    | TSigma _ a1 b1 <- t1, TSigma _ a2 b2 <- t2
+    = etaEq fuel ctx a1 a2 `andResult` etaEq fuel ctx b1 b2
+
+    -- Pair congruence (structural: no fuel consumed)
+    | TPair a1 b1 <- t1, TPair a2 b2 <- t2
+    = etaEq fuel ctx a1 a2 `andResult` etaEq fuel ctx b1 b2
+
+    -- Projection congruence on neutral spines (structural: no fuel consumed)
+    | TFst p1 <- t1, TFst p2 <- t2
+    = etaEq fuel ctx p1 p2
+    | TSnd p1 <- t1, TSnd p2 <- t2
+    = etaEq fuel ctx p1 p2
 
     | otherwise = NotEqual

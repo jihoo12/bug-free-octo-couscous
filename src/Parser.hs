@@ -169,7 +169,7 @@ parseTerm s =
 --   after locals).  All recursive calls go through twG/awG so globals are
 --   always visible.
 twG :: GlobalEnv -> Env -> Parser Term
-twG g env = lamG g env <|> functionG g env <|> plamG g env <|> piG g env <|> appG g env
+twG g env = lamG g env <|> functionG g env <|> plamG g env <|> piG g env <|> sigmaG g env <|> appG g env
 
 lamG :: GlobalEnv -> Env -> Parser Term
 lamG g env = do
@@ -205,6 +205,18 @@ piG g env = do
     bTy <- twG g (x : env)
     return (TPi x aTy bTy)
 
+sigmaG :: GlobalEnv -> Env -> Parser Term
+sigmaG g env = do
+    symbol "SIGMA"
+    symbol "("
+    x   <- name
+    symbol ":"
+    aTy <- twG g env
+    symbol ")"
+    symbol "."
+    bTy <- twG g (x : env)
+    return (TSigma x aTy bTy)
+
 appG :: GlobalEnv -> Env -> Parser Term
 appG g env = do
     f <- awG g env
@@ -236,6 +248,9 @@ awG g env
     <|> equivFwdG g env
     <|> uaG       g env
     <|> transportG g env
+    <|> pairG     g env
+    <|> fstG      g env
+    <|> sndG      g env
     <|> varG g env
     <|> parens (twG g env)
 
@@ -352,6 +367,29 @@ transportG g env = do
     p <- parens (twG g env) <|> awG g env
     x <- awG g env
     return (TTransport p x)
+
+-- | pair t u  — explicit pair constructor
+--   Requires a type annotation at the use site (TPair cannot be inferred).
+pairG :: GlobalEnv -> Env -> Parser Term
+pairG g env = do
+    keyword "pair"
+    a <- parens (twG g env) <|> awG g env
+    b <- parens (twG g env) <|> awG g env
+    return (TPair a b)
+
+-- | fst e  — first projection
+fstG :: GlobalEnv -> Env -> Parser Term
+fstG g env = do
+    keyword "fst"
+    p <- parens (twG g env) <|> awG g env
+    return (TFst p)
+
+-- | snd e  — second projection
+sndG :: GlobalEnv -> Env -> Parser Term
+sndG g env = do
+    keyword "snd"
+    p <- parens (twG g env) <|> awG g env
+    return (TSnd p)
 
 -- | Resolve a name: local binders first, then globals (most-recent = index
 --   len(env), second-most-recent = len(env)+1, etc.).
